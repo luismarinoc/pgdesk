@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "supabaselm": {
+      "url": "https://spb.tbema.net/mcp",
+      "headers": {}
+    }
+  }
+}

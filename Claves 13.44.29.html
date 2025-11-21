@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Claves de Proyectos</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --card-header: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --border: #475569;
+            --radius: 12px;
+
+            /* Badges */
+            --badge-dev: #0ea5e9;
+            --badge-qas: #eab308;
+            --badge-prd: #ef4444;
+            --badge-other: #8b5cf6;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: none;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background-color: var(--card-bg);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-danger {
+            background: transparent;
+            color: var(--danger);
+            padding: 0.4rem;
+        }
+
+        .btn-danger:hover {
+            background-color: rgba(239, 68, 68, 0.1);
+        }
+
+        .btn-icon {
+            padding: 0.4rem;
+            background: transparent;
+            color: var(--text-secondary);
+        }
+
+        .btn-icon:hover {
+            color: var(--accent);
+            background-color: rgba(59, 130, 246, 0.1);
+        }
+
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.8rem;
+        }
+
+        /* Formulario Principal */
+        .main-form {
+            background-color: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: var(--radius);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border);
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            flex: 1;
+        }
+
+        label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        input,
+        select {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 0.6rem;
+            border-radius: 6px;
+            outline: none;
+            width: 100%;
+        }
+
+        input:focus,
+        select:focus {
+            border-color: var(--accent);
+        }
+
+        /* Lista de Proyectos */
+        .project-list {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .project-card {
+            background-color: var(--card-bg);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .card-header {
+            background-color: var(--card-header);
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid transparent;
+            /* Invisible border by default */
+            gap: 1rem;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .card-header:hover {
+            background-color: #3b4a63;
+        }
+
+        /* Cuando está expandido, mostramos el borde inferior */
+        .project-card.expanded .card-header {
+            border-bottom-color: var(--border);
+        }
+
+        .project-title {
+            font-weight: 700;
+            font-size: 1.1rem;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .project-title-edit {
+            display: flex;
+            gap: 0.5rem;
+            flex: 1;
+        }
+
+        .chevron {
+            transition: transform 0.3s ease;
+            color: var(--text-secondary);
+        }
+
+        .project-card.expanded .chevron {
+            transform: rotate(180deg);
+        }
+
+        .card-body {
+            padding: 1.5rem;
+            display: none;
+            /* Oculto por defecto */
+        }
+
+        .project-card.expanded .card-body {
+            display: block;
+            /* Visible si expandido */
+            animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Lista de Credenciales */
+        .cred-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .cred-item {
+            display: grid;
+            grid-template-columns: 100px 1fr 1fr auto;
+            gap: 1rem;
+            align-items: center;
+            padding: 0.75rem;
+            background-color: rgba(15, 23, 42, 0.5);
+            border-radius: 8px;
+            border: 1px solid transparent;
+        }
+
+        .cred-item:hover {
+            border-color: var(--border);
+        }
+
+        .cred-item.editing {
+            background-color: var(--card-bg);
+            border-color: var(--accent);
+            grid-template-columns: 1fr;
+            /* Full width for form */
+        }
+
+        .edit-cred-form {
+            display: grid;
+            grid-template-columns: auto 1fr 1fr auto;
+            gap: 0.5rem;
+            align-items: center;
+            width: 100%;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            text-align: center;
+            text-transform: uppercase;
+            color: #fff;
+            display: inline-block;
+        }
+
+        .badge-DEV {
+            background-color: var(--badge-dev);
+        }
+
+        .badge-QAS {
+            background-color: var(--badge-qas);
+        }
+
+        .badge-PRD {
+            background-color: var(--badge-prd);
+        }
+
+        .badge-OTRO {
+            background-color: var(--badge-other);
+        }
+
+        .cred-user {
+            font-family: monospace;
+            color: var(--text-primary);
+        }
+
+        .cred-pass {
+            font-family: monospace;
+            color: var(--text-secondary);
+            letter-spacing: 2px;
+        }
+
+        /* Formulario de Credencial (Inline) */
+        .add-cred-form {
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px dashed var(--border);
+            display: grid;
+            grid-template-columns: auto 1fr 1fr auto;
+            gap: 0.75rem;
+            align-items: start;
+        }
+
+        .type-selector-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            min-width: 140px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background-color: var(--success);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--radius);
+            transform: translateY(150%);
+            transition: transform 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+            z-index: 100;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+        }
+
+        /* Notas */
+        .notes-section {
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .notes-section label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        textarea {
+            background-color: rgba(15, 23, 42, 0.3);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 0.75rem;
+            border-radius: 8px;
+            width: 100%;
+            min-height: 80px;
+            resize: vertical;
+            font-family: monospace;
+            font-size: 0.9rem;
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        textarea:focus {
+            border-color: var(--accent);
+            color: var(--text-primary);
+            outline: none;
+        }
+
+        @media (max-width: 768px) {
+            .cred-item {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+                padding: 1rem;
+            }
+
+            .add-cred-form {
+                grid-template-columns: 1fr;
+            }
+
+            .main-form {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .edit-cred-form {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1><i data-lucide="shield-lock"></i> Mis Claves</h1>
+            <div style="display:flex; gap:0.5rem;">
+                <input type="file" id="importFile" accept=".json" style="display: none;" onchange="importData(this)">
+                <button class="btn-secondary" onclick="document.getElementById('importFile').click()">
+                    <i data-lucide="upload"></i> Cargar
+                </button>
+                <button class="btn-secondary" onclick="exportData()">
+                    <i data-lucide="download"></i> Backup
+                </button>
+            </div>
+        </header>
+
+        <!-- Formulario Crear Proyecto -->
+        <div class="main-form">
+            <div class="form-group">
+                <label>Nuevo Proyecto</label>
+                <input type="text" id="newProjectName" placeholder="Nombre del proyecto (ej. Web Cliente X)">
+            </div>
+            <button class="btn-primary" onclick="createProject()">
+                <i data-lucide="folder-plus"></i> Crear Proyecto
+            </button>
+        </div>
+
+        <!-- Lista de Proyectos -->
+        <div id="projectList" class="project-list">
+            <!-- Renderizado JS -->
+        </div>
+    </div>
+
+    <div id="toast" class="toast">
+        <i data-lucide="check-circle"></i> Guardado correctamente
+    </div>
+
+    <script>
+        // --- ESTADO ---
+        let projects = JSON.parse(localStorage.getItem('my_projects_v2')) || [];
+
+        // Estado de Edición
+        let editState = {
+            mode: 'NONE',
+            pIndex: -1,
+            cIndex: -1
+        };
+
+        // Estado de Acordeón (índice del proyecto expandido, -1 para ninguno)
+        let expandedIndex = -1;
+
+        // --- RENDERIZADO ---
+        const listEl = document.getElementById('projectList');
+        const toastEl = document.getElementById('toast');
+
+        function render() {
+            listEl.innerHTML = '';
+
+            if (projects.length === 0) {
+                listEl.innerHTML = '<div style="text-align:center; color:var(--text-secondary); padding:2rem;">No hay proyectos. Crea uno arriba.</div>';
+                return;
+            }
+
+            projects.forEach((p, pIndex) => {
+                const isExpanded = (expandedIndex === pIndex);
+                const card = document.createElement('div');
+                card.className = `project-card ${isExpanded ? 'expanded' : ''}`;
+
+                // --- HEADER DEL PROYECTO ---
+                let headerHtml = '';
+                if (editState.mode === 'PROJECT' && editState.pIndex === pIndex) {
+                    // Modo Edición Proyecto
+                    headerHtml = `
+                    <div class="project-title-edit" onclick="event.stopPropagation()">
+                        <input type="text" id="edit-p-name-${pIndex}" value="${escapeHtml(p.name)}">
+                        <button class="btn-primary btn-sm" onclick="saveEditProject(${pIndex})"><i data-lucide="save"></i></button>
+                        <button class="btn-secondary btn-sm" onclick="cancelEdit()"><i data-lucide="x"></i></button>
+                    </div>
+                `;
+                } else {
+                    // Modo Visualización Proyecto
+                    headerHtml = `
+                    <div class="project-title">
+                        <i data-lucide="chevron-down" class="chevron"></i>
+                        ${escapeHtml(p.name)}
+                        <button class="btn-icon" onclick="event.stopPropagation(); startEditProject(${pIndex})" title="Editar Nombre" style="display:inline-flex; margin-left:0.5rem;">
+                            <i data-lucide="pencil" size="14"></i>
+                        </button>
+                    </div>
+                    <button class="btn-danger btn-sm" onclick="event.stopPropagation(); deleteProject(${pIndex})">
+                        <i data-lucide="trash-2" size="16"></i> Eliminar
+                    </button>
+                `;
+                }
+
+                // Onclick en header para toggle
+                let html = `
+                <div class="card-header" onclick="toggleExpand(${pIndex})">
+                    ${headerHtml}
+                </div>
+                <div class="card-body">
+                    <div class="cred-list">
+            `;
+
+                // --- LISTA DE CREDENCIALES (Solo se renderiza si está expandido para optimizar DOM? No, CSS display:none es mejor para transiciones)
+                // Pero para simplificar el string template, lo generamos siempre.
+
+                if (p.credentials.length === 0) {
+                    html += `<div style="font-style:italic; color:var(--text-secondary); font-size:0.9rem;">Sin credenciales aún.</div>`;
+                } else {
+                    p.credentials.forEach((c, cIndex) => {
+                        const isEditing = (editState.mode === 'CREDENTIAL' && editState.pIndex === pIndex && editState.cIndex === cIndex);
+
+                        if (isEditing) {
+                            // Modo Edición Credencial
+                            const isCustom = ['DEV', 'QAS', 'PRD'].indexOf(c.type) === -1;
+                            const selectVal = isCustom ? 'OTRO' : c.type;
+                            const customDisplay = isCustom ? 'block' : 'none';
+
+                            html += `
+                        <div class="cred-item editing">
+                            <div class="edit-cred-form">
+                                <div class="type-selector-group">
+                                    <select id="edit-type-${pIndex}-${cIndex}" onchange="toggleEditCustomType(${pIndex}, ${cIndex})">
+                                        <option value="DEV" ${c.type === 'DEV' ? 'selected' : ''}>DEV</option>
+                                        <option value="QAS" ${c.type === 'QAS' ? 'selected' : ''}>QAS</option>
+                                        <option value="PRD" ${c.type === 'PRD' ? 'selected' : ''}>PRD</option>
+                                        <option value="OTRO" ${selectVal === 'OTRO' ? 'selected' : ''}>OTRO</option>
+                                    </select>
+                                    <input type="text" id="edit-custom-${pIndex}-${cIndex}" value="${escapeHtml(c.customType || '')}" placeholder="Tipo" maxlength="15" style="display:${customDisplay};">
+                                </div>
+                                <input type="text" id="edit-user-${pIndex}-${cIndex}" value="${escapeHtml(c.user)}" placeholder="Usuario">
+                                <input type="text" id="edit-pass-${pIndex}-${cIndex}" value="${escapeHtml(c.pass)}" placeholder="Contraseña">
+                                <div style="display:flex; gap:0.5rem;">
+                                    <button class="btn-primary btn-sm" onclick="saveEditCredential(${pIndex}, ${cIndex})"><i data-lucide="save"></i></button>
+                                    <button class="btn-secondary btn-sm" onclick="cancelEdit()"><i data-lucide="x"></i></button>
+                                </div>
+                            </div>
+                        </div>`;
+                        } else {
+                            // Modo Visualización Credencial
+                            const typeLabel = c.type === 'OTRO' ? c.customType : c.type;
+                            html += `
+                        <div class="cred-item">
+                            <span class="badge badge-${c.type}">${escapeHtml(typeLabel)}</span>
+                            <div class="cred-user" style="display:flex; align-items:center; gap:0.5rem;">
+                                <i data-lucide="user" size="14"></i> 
+                                <span style="margin-right:auto; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(c.user)}</span>
+                                <button class="btn-icon" onclick="copyToClipboard('${escapeHtml(c.user)}')" title="Copiar Usuario" style="padding:0.2rem;">
+                                    <i data-lucide="copy" size="14"></i>
+                                </button>
+                            </div>
+                            <div class="cred-pass" id="pass-display-${pIndex}-${cIndex}">••••••••</div>
+                            <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                                <button class="btn-icon" onclick="togglePass(${pIndex}, ${cIndex}, this)" title="Ver/Ocultar">
+                                    <i data-lucide="eye"></i>
+                                </button>
+                                <button class="btn-icon" onclick="copyToClipboard('${escapeHtml(c.pass)}')" title="Copiar Clave">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                                <button class="btn-icon" onclick="startEditCredential(${pIndex}, ${cIndex})" title="Editar">
+                                    <i data-lucide="pencil"></i>
+                                </button>
+                                <button class="btn-danger" onclick="deleteCredential(${pIndex}, ${cIndex})" title="Borrar Credencial">
+                                    <i data-lucide="x"></i>
+                                </button>
+                            </div>
+                        </div>
+                        `;
+                        }
+                    });
+                }
+
+                html += `</div>`; // Cierre cred-list
+
+                // Formulario Agregar Credencial
+                html += `
+                <div class="add-cred-form">
+                    <div class="type-selector-group">
+                        <select id="type-${pIndex}" onchange="toggleCustomType(${pIndex})">
+                            <option value="DEV">DEV</option>
+                            <option value="QAS">QAS</option>
+                            <option value="PRD">PRD</option>
+                            <option value="OTRO">OTRO</option>
+                        </select>
+                        <input type="text" id="custom-${pIndex}" placeholder="Tipo (max 15)" maxlength="15" style="display:none;">
+                    </div>
+                    <input type="text" id="user-${pIndex}" placeholder="Usuario">
+                    <input type="password" id="pass-${pIndex}" placeholder="Contraseña">
+                    <button class="btn-primary btn-sm" onclick="addCredential(${pIndex})">
+                        <i data-lucide="plus"></i> Guardar
+                    </button>
+                </div>
+                
+                <!-- Notas -->
+                <div class="notes-section">
+                    <label><i data-lucide="sticky-note" size="14"></i> Notas del Proyecto</label>
+                    <textarea id="notes-${pIndex}" placeholder="Escribe aquí notas adicionales, URLs, instrucciones..." onblur="saveNotes(${pIndex})">${escapeHtml(p.notes || '')}</textarea>
+                </div>
+            </div>`; // Cierre card-body
+
+                card.innerHTML = html;
+                listEl.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        // --- LÓGICA DE ACORDEÓN ---
+        function toggleExpand(index) {
+            if (editState.mode === 'PROJECT') return; // No expandir si estamos editando el título
+
+            if (expandedIndex === index) {
+                expandedIndex = -1; // Cerrar si ya estaba abierto
+            } else {
+                expandedIndex = index; // Abrir nuevo y cerrar anterior
+            }
+            render();
+        }
+
+        // --- LÓGICA DE PROYECTO ---
+
+        function createProject() {
+            const nameInput = document.getElementById('newProjectName');
+            const name = nameInput.value.trim();
+            if (!name) return;
+
+            projects.unshift({
+                id: Date.now(),
+                name: name,
+                credentials: [],
+                notes: ''
+            });
+
+            // Abrir el nuevo proyecto automáticamente
+            expandedIndex = 0;
+
+            save();
+            render();
+            nameInput.value = '';
+        }
+
+        function deleteProject(index) {
+            if (confirm('¿Borrar TODO el proyecto y sus claves?')) {
+                projects.splice(index, 1);
+                expandedIndex = -1; // Resetear expansión
+                save();
+                render();
+            }
+        }
+
+        function saveNotes(pIndex) {
+            const textarea = document.getElementById(`notes-${pIndex}`);
+            const val = textarea.value;
+            if (projects[pIndex].notes !== val) {
+                projects[pIndex].notes = val;
+                save();
+                showToast('Notas guardadas');
+            }
+        }
+
+        function togglePass(pIndex, cIndex, btn) {
+            const display = document.getElementById(`pass-display-${pIndex}-${cIndex}`);
+            const isHidden = display.innerText === '••••••••';
+            const icon = btn.querySelector('i'); // O svg si lucide ya renderizó
+
+            if (isHidden) {
+                display.innerText = projects[pIndex].credentials[cIndex].pass;
+                // Cambiar icono a eye-off
+                btn.innerHTML = '<i data-lucide="eye-off"></i>';
+            } else {
+                display.innerText = '••••••••';
+                // Cambiar icono a eye
+                btn.innerHTML = '<i data-lucide="eye"></i>';
+            }
+            lucide.createIcons();
+        }
+
+        function showToast(msg) {
+            toastEl.innerHTML = `<i data-lucide="check-circle"></i> ${msg || 'Copiado'}`;
+            toastEl.classList.add('show');
+            setTimeout(() => toastEl.classList.remove('show'), 2000);
+            lucide.createIcons();
+        }
+
+        // --- LÓGICA DE EDICIÓN (PROYECTO) ---
+        function startEditProject(pIndex) {
+            editState = {
+                mode: 'PROJECT',
+                pIndex: pIndex,
+                cIndex: -1
+            };
+            render();
+            // Focus
+            setTimeout(() => document.getElementById(`edit-p-name-${pIndex}`).focus(), 50);
+        }
+
+        function saveEditProject(pIndex) {
+            const input = document.getElementById(`edit-p-name-${pIndex}`);
+            const newName = input.value.trim();
+            if (newName) {
+                projects[pIndex].name = newName;
+                save();
+            }
+            cancelEdit();
+        }
+
+        // --- LÓGICA DE CREDENCIALES ---
+
+        function toggleCustomType(pIndex) {
+            const select = document.getElementById(`type-${pIndex}`);
+            const customInput = document.getElementById(`custom-${pIndex}`);
+            if (select.value === 'OTRO') {
+                customInput.style.display = 'block';
+                customInput.focus();
+            } else {
+                customInput.style.display = 'none';
+            }
+        }
+
+        function addCredential(pIndex) {
+            const typeSelect = document.getElementById(`type-${pIndex}`);
+            const customInput = document.getElementById(`custom-${pIndex}`);
+            const userInput = document.getElementById(`user-${pIndex}`);
+            const passInput = document.getElementById(`pass-${pIndex}`);
+
+            const type = typeSelect.value;
+            let customType = '';
+
+            if (type === 'OTRO') {
+                customType = customInput.value.trim();
+                if (!customType) {
+                    alert('Escribe el tipo personalizado');
+                    return;
+                }
+            }
+
+            if (!userInput.value.trim() || !passInput.value.trim()) {
+                alert('Falta usuario o contraseña');
+                return;
+            }
+
+            projects[pIndex].credentials.push({
+                id: Date.now(),
+                type,
+                customType: customType.substring(0, 15),
+                user: userInput.value.trim(),
+                pass: passInput.value.trim()
+            });
+
+            save();
+            render();
+        }
+
+        function deleteCredential(pIndex, cIndex) {
+            if (confirm('¿Borrar esta credencial?')) {
+                projects[pIndex].credentials.splice(cIndex, 1);
+                save();
+                render();
+            }
+        }
+
+        // --- LÓGICA DE EDICIÓN (CREDENCIAL) ---
+
+        function startEditCredential(pIndex, cIndex) {
+            editState = {
+                mode: 'CREDENTIAL',
+                pIndex: pIndex,
+                cIndex: cIndex
+            };
+            render();
+        }
+
+        function toggleEditCustomType(pIndex, cIndex) {
+            const select = document.getElementById(`edit-type-${pIndex}-${cIndex}`);
+            const customInput = document.getElementById(`edit-custom-${pIndex}-${cIndex}`);
+            if (select.value === 'OTRO') {
+                customInput.style.display = 'block';
+                customInput.focus();
+            } else {
+                customInput.style.display = 'none';
+            }
+        }
+
+        function saveEditCredential(pIndex, cIndex) {
+            const typeSelect = document.getElementById(`edit-type-${pIndex}-${cIndex}`);
+            const customInput = document.getElementById(`edit-custom-${pIndex}-${cIndex}`);
+            const userInput = document.getElementById(`edit-user-${pIndex}-${cIndex}`);
+            const passInput = document.getElementById(`edit-pass-${pIndex}-${cIndex}`);
+
+            const type = typeSelect.value;
+            let customType = '';
+
+            if (type === 'OTRO') {
+                customType = customInput.value.trim();
+                if (!customType) {
+                    alert('Escribe el tipo personalizado');
+                    return;
+                }
+            }
+
+            if (!userInput.value.trim() || !passInput.value.trim()) {
+                alert('Falta usuario o contraseña');
+                return;
+            }
+
+            // Actualizar
+            projects[pIndex].credentials[cIndex].type = type;
+            projects[pIndex].credentials[cIndex].customType = customType.substring(0, 15);
+            projects[pIndex].credentials[cIndex].user = userInput.value.trim();
+            projects[pIndex].credentials[cIndex].pass = passInput.value.trim();
+
+            save();
+            cancelEdit();
+        }
+
+        function cancelEdit() {
+            editState = {
+                mode: 'NONE',
+                pIndex: -1,
+                cIndex: -1
+            };
+            render();
+        }
+
+        // --- UTILIDADES ---
+        function save() {
+            localStorage.setItem('my_projects_v2', JSON.stringify(projects));
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                const t = document.getElementById('toast');
+                t.classList.add('show');
+                setTimeout(() => t.classList.remove('show'), 2000);
+            });
+        }
+
+        function escapeHtml(text) {
+            if (!text) return text;
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        function exportData() {
+            const dataStr = JSON.stringify(projects, null, 2);
+            const blob = new Blob([dataStr], {
+                type: "application/json"
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `mis_claves_v2_${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function importData(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                try {
+                    const json = JSON.parse(e.target.result);
+                    if (Array.isArray(json)) {
+                        projects = json;
+                        save();
+                        render();
+                        alert('Datos cargados correctamente.');
+                    }
+                } catch (err) {
+                    alert('Error en archivo JSON');
+                }
+            };
+            reader.readAsText(file);
+            input.value = '';
+        }
+
+        // Init
+        render();
+    </script>
+</body>
+
+</html>
