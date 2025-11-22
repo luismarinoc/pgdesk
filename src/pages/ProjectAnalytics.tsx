@@ -119,11 +119,13 @@ export const ProjectAnalytics = () => {
             try {
                 console.log(`Fetching REAL data for Project: ${projectJiraId}, Month: ${selectedMonth} `);
 
+                const cleanJiraId = projectJiraId?.trim();
+
                 // 1. Fetch KPIs from v_tickets_mes_proyecto
                 const { data: kpiData, error: kpiError } = await supabase
                     .from('v_tickets_mes_proyecto')
                     .select('*') // Select ALL columns to find hours
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     // The view has 'mes' as a date (e.g., 2025-09-01). 
                     // We need to match the month. Since selectedMonth is 'YYYY-MM', 
                     // we might need to filter by range or assume the view has a text column or we match the start date.
@@ -134,9 +136,9 @@ export const ProjectAnalytics = () => {
 
                 // 2. Fetch Status Data
                 const { data: statusDataResult, error: statusError } = await supabase
-                    .from('v_tickets_mes_proyecto_status')
+                    .from('v_issues_mes_proyecto_estado')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`);
 
                 // 3. Fetch Priority Data
@@ -144,7 +146,7 @@ export const ProjectAnalytics = () => {
                 const { data: priorityData, error: priorityError } = await supabase
                     .from('v_tickets_mes_proyecto_prioridad_pct')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`);
 
                 // 4. Fetch Assignee Data
@@ -152,12 +154,11 @@ export const ProjectAnalytics = () => {
                 const { data: assigneeData, error: assigneeError } = await supabase
                     .from('v_issues_mes_proyecto_asignacion')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`);
 
 
                 // 5. Fetch Type Data
-                const cleanJiraId = projectJiraId?.trim();
                 const { data: typeDataResult, error: typeError } = await supabase
                     .from('v_issues_mes_proyecto_tipo')
                     .select('*')
@@ -176,14 +177,14 @@ export const ProjectAnalytics = () => {
                 const { data: moduleData, error: moduleError } = await supabase
                     .from('v_horas_mes_modulo_proyecto')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`);
 
                 // 7. Fetch Total Hours Data
                 const { data: hoursData, error: hoursError } = await supabase
                     .from('v_horas_mes_proyecto')
                     .select('total_horas')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`)
                     .single();
 
@@ -191,7 +192,7 @@ export const ProjectAnalytics = () => {
                 const { data: details, error: detailsError } = await supabase
                     .from('v_horas_totales_detalles')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`)
                     .order('created_at_jira', { ascending: false });
 
@@ -243,7 +244,7 @@ export const ProjectAnalytics = () => {
                 const { data: topTicketsResult, error: topTicketsError } = await supabase
                     .from('v_horas_totales_por_proyecto_ticket')
                     .select('*')
-                    .eq('proyecto', projectJiraId)
+                    .eq('proyecto', cleanJiraId)
                     .eq('mes', `${selectedMonth}-01`)
                     .order('ticket_horas', { ascending: false })
                     .limit(10);
@@ -269,7 +270,7 @@ export const ProjectAnalytics = () => {
                     'Trabajo en curso'
                 ];
 
-                const statusMap = new Map(statusDataResult?.map((d: any) => [d.status, Number(d.total_tickets)]) || []);
+                const statusMap = new Map(statusDataResult?.map((d: any) => [d.estado || d.status, Number(d.total_issues) || Number(d.total_tickets)]) || []);
 
                 const mergedStatusData = FIXED_STATUSES.map(status => {
                     const config = STATUS_CONFIG[status] || { color: 'text-slate-400', icon: HelpCircle, label: status };
@@ -281,7 +282,8 @@ export const ProjectAnalytics = () => {
                 });
 
                 // Calculate Completion Rate
-                const totalTickets = Number(kpiData?.total_tickets) || 0;
+                // Use the sum of statusDataResult for totalTickets to ensure consistency with the chart
+                const totalTickets = statusDataResult?.reduce((sum: number, d: any) => sum + (Number(d.total_issues) || Number(d.total_tickets) || 0), 0) || 0;
                 const closedTickets = statusMap.get('Cerrado') || 0;
                 const completionRate = totalTickets > 0 ? Math.round((closedTickets / totalTickets) * 100) : 0;
 
@@ -312,7 +314,7 @@ export const ProjectAnalytics = () => {
                     })) || [],
 
                     kpis: {
-                        totalTickets: kpiData?.total_tickets || 0,
+                        totalTickets: totalTickets,
                         totalHours: hoursData?.total_horas || 0,
                         completionRate: `${completionRate}%`
                     }
@@ -779,70 +781,69 @@ export const ProjectAnalytics = () => {
         let consultantTotal = 0;
         let grandTotal = 0;
 
-        sortedDetails.forEach((d: any, index: number) => {
+        sortedDetails.forEach((d: any) => {
             const consultant = d.assignee_name || d.asignado || 'Sin Asignar';
             const hours = Number(d.horas) || 0;
+            const ticket = d.clave || '';
+            const date = d.created_at_jira ? new Date(d.created_at_jira).toLocaleDateString() : '';
 
-            // Check for consultant change (but not on the first item)
-            if (index > 0 && currentConsultant !== consultant) {
-                // Add subtotal for previous consultant
+            // Handle Consultant Change (Subtotal)
+            if (currentConsultant !== '' && currentConsultant !== consultant) {
                 groupedRows.push([
                     '',
                     '',
                     `Subtotal ${currentConsultant}`,
-                    `${consultantTotal.toFixed(2)} h`,
-                    ''
+                    `${consultantTotal.toFixed(2)} h`
                 ]);
                 consultantTotal = 0;
             }
 
-            currentConsultant = consultant;
-            consultantTotal += hours;
-            grandTotal += hours;
+            if (currentConsultant !== consultant) {
+                currentConsultant = consultant;
+            }
 
-            const date = d.created_at_jira ? new Date(d.created_at_jira).toLocaleDateString('es-ES') : '-';
+            // Add Row
             groupedRows.push([
                 date,
-                d.clave || '-',
+                ticket,
                 consultant,
-                `${hours.toFixed(2)} h`,
-                d.comentario || '-'
+                `${hours.toFixed(2)} h`
             ]);
 
-            // If it's the last item, add the final subtotal
-            if (index === sortedDetails.length - 1) {
-                groupedRows.push([
-                    '',
-                    '',
-                    `Subtotal ${currentConsultant}`,
-                    `${consultantTotal.toFixed(2)} h`,
-                    ''
-                ]);
-            }
+            consultantTotal += hours;
+            grandTotal += hours;
         });
 
-        // 3. Add Grand Total
+        // Add final subtotal
+        if (currentConsultant !== '') {
+            groupedRows.push([
+                '',
+                '',
+                `Subtotal ${currentConsultant}`,
+                `${consultantTotal.toFixed(2)} h`
+            ]);
+        }
+
+        // Add Grand Total
         groupedRows.push([
             '',
             '',
             'TOTAL GENERAL',
-            `${grandTotal.toFixed(2)} h`,
-            ''
+            `${grandTotal.toFixed(2)} h`
         ]);
 
         autoTable(doc, {
             startY: yPos,
-            head: [['Fecha', 'Ticket', 'Consultor', 'Horas', 'Comentario']],
+            head: [['Fecha', 'Ticket', 'Consultor', 'Horas']],
             body: groupedRows,
             theme: 'striped',
             headStyles: { fillColor: secondaryColor },
             styles: { fontSize: 8, cellPadding: 2 },
             columnStyles: {
-                0: { cellWidth: 20 }, // Fecha
-                1: { cellWidth: 25 }, // Ticket
-                2: { cellWidth: 30 }, // Consultor
-                3: { cellWidth: 15, halign: 'right' }, // Horas
-                4: { cellWidth: 'auto' } // Comentario
+                0: { cellWidth: 25 }, // Fecha
+                1: { cellWidth: 35 }, // Ticket
+                2: { cellWidth: 80 }, // Consultor
+                3: { cellWidth: 25, halign: 'right' } // Horas
             },
             margin: { left: margin, right: margin },
             didParseCell: (data) => {
