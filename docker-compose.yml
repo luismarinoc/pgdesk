@@ -1,0 +1,9 @@
+version: "3.9"
+
+services:
+  pgdesk:
+    build: .
+    container_name: pgdesk
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
