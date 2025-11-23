@@ -57,18 +57,35 @@ export const Dashboard = () => {
         <div className="min-h-screen bg-slate-900 text-white p-8">
             <div className="max-w-7xl mx-auto">
                 <header className="flex justify-between items-center mb-12">
-                    <div>
+                    <div className="flex items-center gap-4">
+                        <img
+                            src="/src/assets/logo.png"
+                            alt="GPDesk Logo"
+                            className="h-12 object-contain brightness-0 invert opacity-90"
+                        />
                         <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
                             Dashboard
                         </h1>
-                        <p className="text-slate-400 mt-1">Bienvenido, {user?.nombre}</p>
                     </div>
-                    <button
-                        onClick={logout}
-                        className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-4 py-2 rounded-lg transition-colors border border-red-500/20 text-sm font-medium"
-                    >
-                        Cerrar Sesión
-                    </button>
+
+                    <div className="flex items-center gap-4">
+                        <div className="text-right">
+                            <p className="text-white font-medium">{user?.nombre}</p>
+                            <p className="text-slate-400 text-xs">Conectado</p>
+                        </div>
+                        <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/20">
+                            {user?.nombre?.charAt(0).toUpperCase() || 'U'}
+                        </div>
+                        <button
+                            onClick={logout}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white p-2 rounded-lg transition-colors border border-slate-700"
+                            title="Cerrar Sesión"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                        </button>
+                    </div>
                 </header>
 
                 <div className="mb-8">

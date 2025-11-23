@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
     BarChart,
@@ -42,6 +43,7 @@ const STATUS_CONFIG: Record<string, { color: string; icon: any; label: string }>
 export const ProjectAnalytics = () => {
     const { projectId } = useParams();
     const navigate = useNavigate();
+    const { user } = useAuth();
     const [months, setMonths] = useState<string[]>([]);
     const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -891,21 +893,42 @@ export const ProjectAnalytics = () => {
                         >
                             ← Volver al Dashboard
                         </button>
-                        <h1 className="text-3xl font-bold">{projectName}</h1>
+                        <div className="flex items-center gap-4">
+                            <img
+                                src="/src/assets/logo.png"
+                                alt="GPDesk Logo"
+                                className="h-10 object-contain brightness-0 invert opacity-90"
+                            />
+                            <h1 className="text-3xl font-bold">{projectName}</h1>
+                        </div>
                     </div>
 
-                    <div className="relative">
-                        <select
-                            value={selectedMonth || ''}
-                            onChange={(e) => setSelectedMonth(e.target.value)}
-                            className="appearance-none bg-slate-800 border border-slate-700 hover:border-blue-500 text-white text-lg font-medium py-2 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer transition-all"
-                        >
-                            {months.map(month => (
-                                <option key={month} value={month}>{month}</option>
-                            ))}
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
-                            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
+                    <div className="flex items-center gap-4">
+                        <div className="relative">
+                            <select
+                                value={selectedMonth || ''}
+                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                className="appearance-none bg-slate-800 border border-slate-700 hover:border-blue-500 text-white text-lg font-medium py-2 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer transition-all"
+                            >
+                                {months.map(month => (
+                                    <option key={month} value={month}>{month}</option>
+                                ))}
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
+                            </div>
+                        </div>
+
+                        <div className="h-8 w-px bg-slate-700 mx-2 hidden md:block"></div>
+
+                        <div className="flex items-center gap-4">
+                            <div className="text-right hidden md:block">
+                                <p className="text-white font-medium">{user?.nombre}</p>
+                                <p className="text-slate-400 text-xs">Conectado</p>
+                            </div>
+                            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/20">
+                                {user?.nombre?.charAt(0).toUpperCase() || 'U'}
+                            </div>
                         </div>
                     </div>
                 </header>
@@ -1010,36 +1033,45 @@ export const ProjectAnalytics = () => {
                         </div>
                     </div>
 
-                    {/* Module Hours Chart (Pie) */}
+                    {/* Module Hours Chart (Horizontal Bar) */}
                     <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
                         <h3 className="text-lg font-semibold mb-6">Horas por Módulo</h3>
-                        <div className="h-80">
+                        <div className="h-96">
                             <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                    <Pie
-                                        data={dashboardData?.module}
-                                        cx="50%"
-                                        cy="40%"
-                                        labelLine={true}
-                                        label={({ percent }: any) => {
-                                            if (percent < 0.03) return ''; // Hide labels for < 3%
-                                            return `${(percent * 100).toFixed(2)}%`;
-                                        }}
-                                        outerRadius={90}
-                                        fill="#8884d8"
-                                        dataKey="value"
-                                        style={{ fontSize: '11px' }}
-                                    >
-                                        {dashboardData?.module?.map((entry: any, index: number) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                        ))}
-                                    </Pie>
+                                <BarChart
+                                    layout="vertical"
+                                    data={dashboardData?.module}
+                                    margin={{ top: 5, right: 50, left: 40, bottom: 5 }}
+                                >
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                    <XAxis type="number" stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                                    <YAxis
+                                        dataKey="name"
+                                        type="category"
+                                        stroke="#94a3b8"
+                                        tick={{ fontSize: 11 }}
+                                        width={150}
+                                    />
                                     <Tooltip
                                         contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
                                         itemStyle={{ color: '#f8fafc' }}
+                                        cursor={{ fill: '#334155', opacity: 0.4 }}
+                                        formatter={(value: any) => [`${value} horas`, 'Horas']}
                                     />
-                                    <Legend verticalAlign="bottom" height={36} wrapperStyle={{ bottom: 10 }} />
-                                </PieChart>
+                                    <Bar dataKey="value" fill="#06b6d4" radius={[0, 4, 4, 0]} barSize={20}>
+                                        <LabelList
+                                            dataKey="value"
+                                            position="right"
+                                            fill="#94a3b8"
+                                            fontSize={11}
+                                            formatter={(value: number) => {
+                                                const total = dashboardData?.module?.reduce((acc: number, curr: any) => acc + curr.value, 0) || 0;
+                                                const percent = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
+                                                return `${value} (${percent}%)`;
+                                            }}
+                                        />
+                                    </Bar>
+                                </BarChart>
                             </ResponsiveContainer>
                         </div>
                     </div>

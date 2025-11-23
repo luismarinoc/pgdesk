@@ -36,7 +36,13 @@ export const Login = () => {
             <div className="relative z-10 w-full max-w-md p-8">
                 <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-8">
                     <div className="mb-8 text-center">
-                        <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">GPDesk</h1>
+                        <div className="flex justify-center mb-4">
+                            <img
+                                src="/src/assets/logo.png"
+                                alt="GPDesk Logo"
+                                className="h-16 object-contain brightness-0 invert opacity-90"
+                            />
+                        </div>
                         <p className="text-slate-400 text-sm">Gestión de Proyectos Profesional</p>
                     </div>
 
