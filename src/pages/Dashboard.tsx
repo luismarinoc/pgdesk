@@ -61,7 +61,7 @@ export const Dashboard = () => {
                         <img
                             src="/src/assets/logo.png"
                             alt="GPDesk Logo"
-                            className="h-12 object-contain brightness-0 invert opacity-90"
+                            className="h-12 object-contain"
                         />
                         <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
                             Dashboard

@@ -40,7 +40,7 @@ export const Login = () => {
                             <img
                                 src="/src/assets/logo.png"
                                 alt="GPDesk Logo"
-                                className="h-16 object-contain brightness-0 invert opacity-90"
+                                className="h-12 object-contain"
                             />
                         </div>
                         <p className="text-slate-400 text-sm">Gestión de Proyectos Profesional</p>

@@ -897,7 +897,7 @@ export const ProjectAnalytics = () => {
                             <img
                                 src="/src/assets/logo.png"
                                 alt="GPDesk Logo"
-                                className="h-10 object-contain brightness-0 invert opacity-90"
+                                className="h-10 object-contain"
                             />
                             <h1 className="text-3xl font-bold">{projectName}</h1>
                         </div>
@@ -1064,7 +1064,7 @@ export const ProjectAnalytics = () => {
                                             position="right"
                                             fill="#94a3b8"
                                             fontSize={11}
-                                            formatter={(value: number) => {
+                                            formatter={(value: any) => {
                                                 const total = dashboardData?.module?.reduce((acc: number, curr: any) => acc + curr.value, 0) || 0;
                                                 const percent = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
                                                 return `${value} (${percent}%)`;
