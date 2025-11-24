@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import logo from '../assets/logo.png';
+import { Footer } from '../components/Footer';
 
 interface Project {
     id: string;
@@ -55,7 +56,7 @@ export const Dashboard = () => {
     }, [user]);
 
     return (
-        <div className="min-h-screen bg-slate-900 text-white p-8">
+        <div className="min-h-screen bg-slate-900 text-white p-8 flex flex-col">
             <div className="max-w-7xl mx-auto">
                 <header className="flex justify-between items-center mb-12">
                     <div className="flex items-center gap-4">
@@ -142,6 +143,9 @@ export const Dashboard = () => {
                         </div>
                     )}
                 </div>
+            </div>
+            <div className="mt-auto">
+                <Footer />
             </div>
         </div>
     );

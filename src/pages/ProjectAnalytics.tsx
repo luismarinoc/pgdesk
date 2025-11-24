@@ -30,6 +30,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import logo from '../assets/logo.png';
+import { Footer } from '../components/Footer';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -884,7 +885,7 @@ export const ProjectAnalytics = () => {
     }
 
     return (
-        <div className="min-h-screen bg-slate-900 text-white p-8">
+        <div className="min-h-screen bg-slate-900 text-white p-8 flex flex-col">
             <div className="max-w-7xl mx-auto">
                 <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
                     <div>
@@ -1189,6 +1190,9 @@ export const ProjectAnalytics = () => {
                         </table>
                     </div>
                 </div>
+            </div>
+            <div className="mt-auto pt-12">
+                <Footer />
             </div>
         </div>
     );
