@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
+import logo from '../assets/logo.png';
 
 interface Project {
     id: string;
@@ -59,7 +60,7 @@ export const Dashboard = () => {
                 <header className="flex justify-between items-center mb-12">
                     <div className="flex items-center gap-4">
                         <img
-                            src="/src/assets/logo.png"
+                            src={logo}
                             alt="GPDesk Logo"
                             className="h-12 object-contain"
                         />

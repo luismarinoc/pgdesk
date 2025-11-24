@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import logo from '../assets/logo.png';
 
 export const Login = () => {
     const [email, setEmail] = useState('');
@@ -38,7 +39,7 @@ export const Login = () => {
                     <div className="mb-8 text-center">
                         <div className="flex justify-center mb-4">
                             <img
-                                src="/src/assets/logo.png"
+                                src={logo}
                                 alt="GPDesk Logo"
                                 className="h-12 object-contain"
                             />

@@ -29,6 +29,7 @@ import {
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import logo from '../assets/logo.png';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -895,7 +896,7 @@ export const ProjectAnalytics = () => {
                         </button>
                         <div className="flex items-center gap-4">
                             <img
-                                src="/src/assets/logo.png"
+                                src={logo}
                                 alt="GPDesk Logo"
                                 className="h-10 object-contain"
                             />
