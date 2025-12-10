@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -24,13 +24,35 @@ import {
     Clock,
     HelpCircle,
     Download,
-    FileText
+    FileText,
+    ArrowLeft
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
-import logo from '../assets/logo.png';
+import logo from '../assets/logo-new.png';
 import { Footer } from '../components/Footer';
+
+// Helper functions
+const getStatusIcon = (status: string) => {
+    switch (status) {
+        case 'Cerrado': return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
+        case 'En Progreso': return <Clock className="w-5 h-5 text-blue-500" />;
+        case 'Bloqueado': return <XCircle className="w-5 h-5 text-red-500" />;
+        case 'Pruebas de usuario': return <AlertCircle className="w-5 h-5 text-yellow-500" />;
+        default: return <HelpCircle className="w-5 h-5 text-slate-500" />;
+    }
+};
+
+const getPriorityColor = (priority: string) => {
+    switch (priority) {
+        case 'Alta': return '#ef4444'; // red-500
+        case 'Media': return '#eab308'; // yellow-500
+        case 'Baja': return '#3b82f6'; // blue-500
+        default: return '#94a3b8'; // slate-400
+    }
+};
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -60,6 +82,7 @@ export const ProjectAnalytics = () => {
     const [moduleDataPDF, setModuleDataPDF] = useState<any[]>([]);
     const [projectName, setProjectName] = useState('');
     const [projectJiraId, setProjectJiraId] = useState<string | null>(null);
+    const [projectContractedHours, setProjectContractedHours] = useState<number>(50);
 
     // Fetch available months and project details
     useEffect(() => {
@@ -70,24 +93,23 @@ export const ProjectAnalytics = () => {
                 // Get Project Name and Jira ID
                 const { data: project } = await supabase
                     .from('proyectos')
-                    .select('nombre, jira_id')
+                    .select('nombre, jira_id, horas_contratadas')
                     .eq('id', projectId)
                     .single();
 
                 let currentJiraId = null;
                 if (project) {
                     setProjectName(project.nombre);
-                    // Cast to any to avoid TS error if types aren't updated
                     const p = project as any;
                     setProjectJiraId(p.jira_id);
+                    setProjectContractedHours(Number(p.horas_contratadas) || 50);
                     currentJiraId = p.jira_id;
                 }
 
                 if (currentJiraId) {
-                    // Get available months from the REAL view
-                    // The view 'v_tickets_mes_proyecto' uses 'proyecto' column (text) for the ID
+                    // Get available months from v_horas_mes_proyecto
                     const { data: monthData, error } = await supabase
-                        .from('v_tickets_mes_proyecto')
+                        .from('v_horas_mes_proyecto')
                         .select('mes')
                         .eq('proyecto', currentJiraId);
 
@@ -95,14 +117,21 @@ export const ProjectAnalytics = () => {
                         console.warn('Error fetching months from view:', error);
                         // Fallback only if error
                         setMonths(['2025-09', '2025-08', '2025-07']);
-                    } else {
-                        // Extract unique months and format
-                        const uniqueMonths = Array.from(new Set(monthData.map((item: any) => item.mes.substring(0, 7))));
+                    } else if (monthData && monthData.length > 0) {
+                        // Supabase returns dates as strings like "2025-12-01"
+                        // Extract YYYY-MM from each date string
+                        const uniqueMonths = Array.from(new Set(monthData.map((item: any) => {
+                            const dateStr = typeof item.mes === 'string' ? item.mes : String(item.mes);
+                            return dateStr.substring(0, 7); // Extract YYYY-MM
+                        })));
+
                         const sortedMonths = uniqueMonths.sort().reverse();
                         setMonths(sortedMonths);
                         if (sortedMonths.length > 0) {
                             setSelectedMonth(sortedMonths[0]);
                         }
+                    } else {
+                        setMonths([]);
                     }
                 }
             } catch (err) {
@@ -289,6 +318,7 @@ export const ProjectAnalytics = () => {
                 // Use the sum of statusDataResult for totalTickets to ensure consistency with the chart
                 const totalTickets = statusDataResult?.reduce((sum: number, d: any) => sum + (Number(d.total_issues) || Number(d.total_tickets) || 0), 0) || 0;
                 const closedTickets = statusMap.get('Cerrado') || 0;
+
                 const completionRate = totalTickets > 0 ? Math.round((closedTickets / totalTickets) * 100) : 0;
 
                 const newDashboardData = {
@@ -320,7 +350,7 @@ export const ProjectAnalytics = () => {
                     kpis: {
                         totalTickets: totalTickets,
                         totalHours: hoursData?.total_horas || 0,
-                        completionRate: `${completionRate}%`
+                        completionRate: completionRate
                     }
                 };
 
@@ -391,32 +421,88 @@ export const ProjectAnalytics = () => {
         }
     };
 
-    const generatePDF = () => {
+    const generatePDF = async () => {
         const doc = new jsPDF();
         const pageWidth = doc.internal.pageSize.width;
         const pageHeight = doc.internal.pageSize.height;
         const margin = 15;
-        const primaryColor = [41, 128, 185]; // Blue
+        const primaryColor = [52, 152, 219]; // Lighter Blue (User requested)
         const secondaryColor = [52, 73, 94]; // Dark Slate
         const accentColor = [230, 126, 34]; // Orange
         const lightBg = [245, 247, 250]; // Light Gray
+
+        // Helper: Load Image with dimensions
+        const loadImage = (src: string): Promise<{ data: string; width: number; height: number }> => {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.src = src;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        ctx.drawImage(img, 0, 0);
+                        resolve({
+                            data: canvas.toDataURL('image/png'),
+                            width: img.width,
+                            height: img.height
+                        });
+                    } else {
+                        reject(new Error('Could not get canvas context'));
+                    }
+                };
+                img.onerror = reject;
+            });
+        };
+
+        let logoData: { data: string; width: number; height: number } | null = null;
+        try {
+            logoData = await loadImage(logo);
+        } catch (error) {
+            console.warn('Could not load logo for PDF:', error);
+        }
 
         // Helper: Header
         const addHeader = (title: string) => {
             // Brand Bar
             doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-            doc.rect(0, 0, pageWidth, 15, 'F');
+            doc.rect(0, 0, pageWidth, 30, 'F');
+
+            let titleXOffset = margin;
+
+            // Add Logo to header
+            if (logoData) {
+                try {
+                    // Calculate aspect ratio
+                    const maxHeight = 12; // Reduced from 20 to 12
+                    const ratio = logoData.width / logoData.height;
+                    const logoHeight = maxHeight;
+                    const logoWidth = maxHeight * ratio;
+
+                    const logoX = margin;
+                    const logoY = 9; // Centered vertically: (30 - 12) / 2 = 9
+
+                    doc.addImage(logoData.data, 'PNG', logoX, logoY, logoWidth, logoHeight);
+
+                    // Adjust title offset based on logo width
+                    titleXOffset += logoWidth + 10;
+                } catch (error) {
+                    console.warn('Could not add logo to PDF:', error);
+                }
+            }
 
             // Title
-            doc.setFontSize(16);
+            doc.setFontSize(16); // Reduced from 18 to 16 to save space
             doc.setTextColor(255, 255, 255);
             doc.setFont("helvetica", "bold");
-            doc.text(title, margin, 10);
+            // Center text vertically relative to the 30-unit header
+            doc.text(title, titleXOffset, 20);
 
             // Meta
             doc.setFontSize(10);
             doc.setFont("helvetica", "normal");
-            doc.text(`${projectName} | ${selectedMonth}`, pageWidth - margin, 10, { align: 'right' });
+            doc.text(`${projectName} | ${selectedMonth}`, pageWidth - margin, 20, { align: 'right' });
         };
 
         // Helper: Footer
@@ -430,11 +516,12 @@ export const ProjectAnalytics = () => {
         // --- PAGE 1: EXECUTIVE SUMMARY ---
         addHeader("Resumen Ejecutivo");
 
-        let yPos = 30;
+        let yPos = 40; // Increased from 35 to 40 for better spacing
 
         // 1. KPIs Row
-        const kpiWidth = (pageWidth - (margin * 2) - 20) / 3;
-        const kpiHeight = 25;
+        const kpiGap = 15; // Increased gap between cards
+        const kpiWidth = (pageWidth - (margin * 2) - (kpiGap * 2)) / 3;
+        const kpiHeight = 30; // Increased height for better breathing room
 
         const kpis = [
             { label: "Total Tickets", value: dashboardData?.kpis?.totalTickets || 0, color: [52, 152, 219] },
@@ -443,29 +530,29 @@ export const ProjectAnalytics = () => {
         ];
 
         kpis.forEach((kpi, i) => {
-            const x = margin + (i * (kpiWidth + 10));
+            const x = margin + (i * (kpiWidth + kpiGap));
             // @ts-ignore
             doc.setFillColor(...kpi.color);
-            doc.roundedRect(x, yPos, kpiWidth, kpiHeight, 2, 2, 'F');
+            doc.roundedRect(x, yPos, kpiWidth, kpiHeight, 3, 3, 'F'); // Increased corner radius
 
             doc.setTextColor(255, 255, 255);
-            doc.setFontSize(10);
-            doc.text(kpi.label, x + 5, yPos + 8);
-            doc.setFontSize(14);
+            doc.setFontSize(11); // Increased font size
+            doc.text(kpi.label, x + 6, yPos + 10);
+            doc.setFontSize(16); // Increased value size
             doc.setFont("helvetica", "bold");
-            doc.text(String(kpi.value), x + 5, yPos + 18);
+            doc.text(String(kpi.value), x + 6, yPos + 22);
         });
 
-        yPos += kpiHeight + 15;
+        yPos += kpiHeight + 10; // Reduced spacing after KPIs
 
         // 2. Billing Section
         doc.setTextColor(secondaryColor[0], secondaryColor[1], secondaryColor[2]);
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
         doc.text("Estado de Facturación", margin, yPos);
-        yPos += 8;
+        yPos += 6;
 
-        const contractedHours = 50;
+        const contractedHours = projectContractedHours;
         const totalHours = Number(dashboardData?.kpis?.totalHours || 0);
         const additionalHours = Math.max(0, totalHours - contractedHours);
 
@@ -480,18 +567,18 @@ export const ProjectAnalytics = () => {
             head: [['Concepto', 'Valor', 'Estado']],
             body: billingBody,
             theme: 'grid',
-            headStyles: { fillColor: secondaryColor },
-            styles: { fontSize: 10, cellPadding: 4 },
+            headStyles: { fillColor: secondaryColor, fontSize: 11, cellPadding: 6 },
+            styles: { fontSize: 10, cellPadding: 6 }, // Increased padding
             columnStyles: { 0: { fontStyle: 'bold' } },
             margin: { left: margin, right: margin }
         });
 
         // @ts-ignore
-        yPos = doc.lastAutoTable.finalY + 15;
+        yPos = doc.lastAutoTable.finalY + 15; // Reduced spacing
 
         // 3. Status Summary
         doc.text("Resumen por Estado", margin, yPos);
-        yPos += 8;
+        yPos += 6;
 
         const statusRows = dashboardData?.status.map((s: any) => [s.name, s.value, `${((s.value / (dashboardData?.kpis?.totalTickets || 1)) * 100).toFixed(1)}%`]) || [];
 
@@ -500,9 +587,10 @@ export const ProjectAnalytics = () => {
             head: [['Estado', 'Cantidad', '%']],
             body: statusRows,
             theme: 'striped',
-            headStyles: { fillColor: primaryColor },
-            styles: { fontSize: 10 },
-            margin: { left: margin, right: margin }
+            headStyles: { fillColor: primaryColor, fontSize: 11, cellPadding: 6 },
+            styles: { fontSize: 10, cellPadding: 6 }, // Increased padding
+            margin: { left: margin, right: margin },
+            pageBreak: 'avoid'
         });
 
         addFooter(1);
@@ -510,14 +598,14 @@ export const ProjectAnalytics = () => {
         // --- PAGE 2: DETAILED METRICS ---
         doc.addPage();
         addHeader("Métricas Detalladas");
-        yPos = 30;
+        yPos = 45;
 
         // 1. Priority Breakdown
         doc.setTextColor(secondaryColor[0], secondaryColor[1], secondaryColor[2]);
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
         doc.text("Desglose por Prioridad", margin, yPos);
-        yPos += 8;
+        yPos += 6;
 
         const priorityRows = dashboardData?.priority.map((p: any) => [p.name, p.value, `${Number(p.pct).toFixed(1)}%`]) || [];
         const totalPriorityTickets = priorityRows.reduce((sum: number, row: any) => sum + (Number(row[1]) || 0), 0);
@@ -530,8 +618,8 @@ export const ProjectAnalytics = () => {
             head: [['Prioridad', 'Tickets', '%']],
             body: priorityRows,
             theme: 'grid',
-            headStyles: { fillColor: accentColor },
-            styles: { fontSize: 10 },
+            headStyles: { fillColor: accentColor, fontSize: 11, cellPadding: 5 },
+            styles: { fontSize: 10, cellPadding: 5 },
             margin: { left: margin, right: pageWidth / 2 + 5 },
             tableWidth: (pageWidth - (margin * 3)) / 2,
             didParseCell: (data) => {
@@ -546,64 +634,29 @@ export const ProjectAnalytics = () => {
         // @ts-ignore
         const finalYPriority = doc.lastAutoTable.finalY;
 
-        doc.text("Desglose por Tipo", pageWidth / 2 + 5, 30); // Align with Priority title
+        doc.text("Desglose por Tipo", pageWidth / 2 + 5, 45);
         const typeRows = dashboardData?.type.map((t: any) => [t.name, t.value]) || [];
 
         autoTable(doc, {
-            startY: 38, // Align with Priority table start
+            startY: 55, // Adjusted startY
             head: [['Tipo', 'Tickets']],
             body: typeRows,
             theme: 'grid',
-            headStyles: { fillColor: secondaryColor },
-            styles: { fontSize: 10 },
+            headStyles: { fillColor: secondaryColor, fontSize: 11, cellPadding: 5 },
+            styles: { fontSize: 10, cellPadding: 5 },
             margin: { left: pageWidth / 2 + 5, right: margin },
             tableWidth: (pageWidth - (margin * 3)) / 2
         });
 
         // @ts-ignore
         const finalYType = doc.lastAutoTable.finalY;
-        yPos = Math.max(finalYPriority, finalYType) + 15;
+        yPos = Math.max(finalYPriority, finalYType) + 15; // Reduced spacing
 
-        // 3. Module Breakdown (Full width)
-        doc.text("Horas por Módulo", margin, yPos);
-        yPos += 8;
-
-        const moduleRows = moduleDataPDF.map(m => [m.modulo, Number(m.total_horas)]);
-        const totalModuleHours = moduleRows.reduce((sum: number, row: any) => sum + (Number(row[1]) || 0), 0);
-
-        // Format rows for display
-        const formattedModuleRows = moduleRows.map((r: any) => [r[0], `${r[1].toFixed(2)} h`]);
-        // Add Total Row
-        formattedModuleRows.push(['TOTAL', `${totalModuleHours.toFixed(2)} h`]);
-
-        autoTable(doc, {
-            startY: yPos,
-            head: [['Módulo', 'Horas Totales']],
-            body: formattedModuleRows,
-            theme: 'striped',
-            headStyles: { fillColor: primaryColor },
-            styles: { fontSize: 10 },
-            margin: { left: margin, right: margin },
-            didParseCell: (data) => {
-                if (data.row.index === formattedModuleRows.length - 1) {
-                    data.cell.styles.fontStyle = 'bold';
-                    data.cell.styles.fillColor = [240, 240, 240];
-                }
-            }
-        });
-
-        // Consultant Breakdown (Full Width below)
-        // @ts-ignore
-        let finalYModule = doc.lastAutoTable.finalY;
-        let nextY = Math.max(finalYType, finalYModule) + 15;
-
-        if (nextY > pageHeight - 40) {
-            doc.addPage();
-            nextY = 20;
-        }
+        // Consultant Performance Section
+        let nextY = yPos;
 
         doc.setFontSize(14);
-        doc.setTextColor(41, 128, 185);
+        doc.setTextColor(52, 152, 219);
         doc.text("Desempeño por Consultor", margin, nextY);
 
         const consultantRows = consultantData.map(c => [
@@ -636,12 +689,12 @@ export const ProjectAnalytics = () => {
         ]);
 
         autoTable(doc, {
-            startY: nextY + 5,
+            startY: nextY + 10,
             head: [['Consultor', 'Tickets', 'Horas', '% Tickets', '% Horas']],
             body: formattedConsultantRows,
             theme: 'striped',
-            headStyles: { fillColor: [41, 128, 185] },
-            styles: { fontSize: 10 },
+            headStyles: { fillColor: [52, 152, 219], fontSize: 11, cellPadding: 5 },
+            styles: { fontSize: 10, cellPadding: 5 },
             margin: { left: margin, right: margin },
             didParseCell: (data) => {
                 if (data.row.index === formattedConsultantRows.length - 1) {
@@ -656,14 +709,14 @@ export const ProjectAnalytics = () => {
         // --- PAGE 3: DEEP DIVE ---
         doc.addPage();
         addHeader("Análisis Detallado");
-        yPos = 30;
+        yPos = 45;
 
         // 1. Top Tickets
         doc.setTextColor(secondaryColor[0], secondaryColor[1], secondaryColor[2]);
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
         doc.text("Top 5 Tickets (Mayor Consumo)", margin, yPos);
-        yPos += 8;
+        yPos += 6;
 
         const topTicketRows = topTicketsData.slice(0, 5).map((t, i) => [
             `${i + 1}`,
@@ -677,19 +730,19 @@ export const ProjectAnalytics = () => {
             head: [['#', 'Ticket', 'Horas']],
             body: topTicketRows,
             theme: 'grid',
-            headStyles: { fillColor: [231, 76, 60] }, // Red for "Hot" items
-            styles: { fontSize: 10 },
+            headStyles: { fillColor: [231, 76, 60], fontSize: 11, cellPadding: 5 },
+            styles: { fontSize: 10, cellPadding: 5 },
             columnStyles: { 0: { cellWidth: 10 }, 2: { cellWidth: 30, halign: 'right' } },
             margin: { left: margin, right: margin }
         });
 
         // @ts-ignore
-        yPos = doc.lastAutoTable.finalY + 15;
+        yPos = doc.lastAutoTable.finalY + 15; // Reduced spacing
 
         // 2. Daily Activity Calendar (Mini version)
         if (yPos + 60 < pageHeight) {
             doc.text("Actividad Diaria (Tickets Creados)", margin, yPos);
-            yPos += 10;
+            yPos += 6;
 
             // Simple Calendar Grid
             const days = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -755,18 +808,18 @@ export const ProjectAnalytics = () => {
         // --- PAGE 4: HOURS DETAIL ---
         doc.addPage();
         addHeader("Detalle de Horas");
-        yPos = 30;
+        yPos = 45;
 
         doc.setTextColor(secondaryColor[0], secondaryColor[1], secondaryColor[2]);
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
         doc.text("Registro Detallado de Actividades", margin, yPos);
-        yPos += 8;
+        yPos += 6;
 
         // Map detailsData to table rows
         // Assuming detailsData has: created_at_jira (date), clave (ticket), assignee_name (consultant), horas (hours), comentario (comment)
 
-        // 1. Sort by Consultant, then Ticket, then Date
+        // 1. Sort by Consultant, then Ticket (Numeric)
         const sortedDetails = [...detailsData].sort((a: any, b: any) => {
             const consultantA = a.assignee_name || a.asignado || '';
             const consultantB = b.assignee_name || b.asignado || '';
@@ -774,9 +827,18 @@ export const ProjectAnalytics = () => {
 
             const ticketA = a.clave || '';
             const ticketB = b.clave || '';
-            if (ticketA !== ticketB) return ticketA.localeCompare(ticketB);
 
-            return (a.created_at_jira || '').localeCompare(b.created_at_jira || '');
+            // Extract numeric part from key (e.g., "BASH-1004" -> 1004)
+            const matchA = ticketA.match(/-(\d+)$/);
+            const matchB = ticketB.match(/-(\d+)$/);
+
+            if (matchA && matchB) {
+                const numA = parseInt(matchA[1], 10);
+                const numB = parseInt(matchB[1], 10);
+                if (numA !== numB) return numA - numB;
+            }
+
+            return ticketA.localeCompare(ticketB);
         });
 
         // 2. Group and Calculate Subtotals
@@ -789,12 +851,11 @@ export const ProjectAnalytics = () => {
             const consultant = d.assignee_name || d.asignado || 'Sin Asignar';
             const hours = Number(d.horas) || 0;
             const ticket = d.clave || '';
-            const date = d.created_at_jira ? new Date(d.created_at_jira).toLocaleDateString() : '';
+            // Date removed as requested
 
             // Handle Consultant Change (Subtotal)
             if (currentConsultant !== '' && currentConsultant !== consultant) {
                 groupedRows.push([
-                    '',
                     '',
                     `Subtotal ${currentConsultant}`,
                     `${consultantTotal.toFixed(2)} h`
@@ -808,7 +869,6 @@ export const ProjectAnalytics = () => {
 
             // Add Row
             groupedRows.push([
-                date,
                 ticket,
                 consultant,
                 `${hours.toFixed(2)} h`
@@ -822,7 +882,6 @@ export const ProjectAnalytics = () => {
         if (currentConsultant !== '') {
             groupedRows.push([
                 '',
-                '',
                 `Subtotal ${currentConsultant}`,
                 `${consultantTotal.toFixed(2)} h`
             ]);
@@ -831,40 +890,47 @@ export const ProjectAnalytics = () => {
         // Add Grand Total
         groupedRows.push([
             '',
-            '',
             'TOTAL GENERAL',
             `${grandTotal.toFixed(2)} h`
         ]);
 
+        // @ts-ignore
+        const startPageHours = doc.internal.getNumberOfPages();
+
         autoTable(doc, {
             startY: yPos,
-            head: [['Fecha', 'Ticket', 'Consultor', 'Horas']],
+            head: [['Ticket', 'Consultor', 'Horas']],
             body: groupedRows,
             theme: 'striped',
-            headStyles: { fillColor: secondaryColor },
-            styles: { fontSize: 8, cellPadding: 2 },
+            headStyles: { fillColor: secondaryColor, fontSize: 10, cellPadding: 4 },
+            styles: { fontSize: 9, cellPadding: 4 }, // Increased font and padding
             columnStyles: {
-                0: { cellWidth: 25 }, // Fecha
-                1: { cellWidth: 35 }, // Ticket
-                2: { cellWidth: 80 }, // Consultor
-                3: { cellWidth: 25, halign: 'right' } // Horas
+                0: { cellWidth: 40 }, // Ticket
+                1: { cellWidth: 100 }, // Consultor
+                2: { cellWidth: 25, halign: 'right' } // Horas
             },
-            margin: { left: margin, right: margin },
+            margin: { left: margin, right: margin, top: 40 }, // Added top margin for header space on new pages
+            didDrawPage: (data) => {
+                // Add header to new pages generated by this table
+                if (data.pageNumber > startPageHours) {
+                    addHeader("Detalle de Horas");
+                }
+            },
             didParseCell: (data) => {
                 const rawRow = data.row.raw as string[];
-                const consultantCell = rawRow[2];
+                const consultantCell = rawRow[1];
 
                 // Style Subtotal rows
                 if (consultantCell && consultantCell.startsWith('Subtotal')) {
                     data.cell.styles.fontStyle = 'bold';
-                    data.cell.styles.fillColor = [230, 230, 230]; // Light Gray
+                    data.cell.styles.fillColor = [220, 220, 220]; // Distinct Light Gray
                     data.cell.styles.textColor = [0, 0, 0];
                 }
 
                 // Style Grand Total row
                 if (consultantCell === 'TOTAL GENERAL') {
                     data.cell.styles.fontStyle = 'bold';
-                    data.cell.styles.fillColor = [41, 128, 185]; // Primary Blue
+                    data.cell.styles.fillColor = [52, 152, 219]; // Lighter Blue (Primary)
                     data.cell.styles.textColor = [255, 255, 255];
                 }
             }
@@ -880,135 +946,262 @@ export const ProjectAnalytics = () => {
     // Calculate total hours from detailsData
     const totalHoursDetails = detailsData.reduce((sum, item) => sum + (Number(item.horas) || 0), 0);
 
+    // Group and Sort Details Data
+    const groupedDetails = useMemo(() => {
+        if (!detailsData) return [];
+
+        // 1. Sort by Assignee, then Ticket Key (Numeric)
+        const sorted = [...detailsData].sort((a, b) => {
+            const assigneeA = (a.assignee_name || a.asignado || 'Sin Asignar').toLowerCase();
+            const assigneeB = (b.assignee_name || b.asignado || 'Sin Asignar').toLowerCase();
+            if (assigneeA !== assigneeB) return assigneeA.localeCompare(assigneeB);
+
+            // If same assignee, sort by Ticket Key (Numeric if possible)
+            const keyA = a.clave || '';
+            const keyB = b.clave || '';
+
+            // Extract numeric part from key (e.g., "BASH-1004" -> 1004)
+            const matchA = keyA.match(/-(\d+)$/);
+            const matchB = keyB.match(/-(\d+)$/);
+
+            if (matchA && matchB) {
+                const numA = parseInt(matchA[1], 10);
+                const numB = parseInt(matchB[1], 10);
+                if (numA !== numB) return numA - numB;
+            }
+
+            // Fallback to string compare if parsing fails
+            return keyA.localeCompare(keyB);
+        });
+
+        // 2. Group by Assignee
+        const groups: { assignee: string; tickets: any[]; totalHours: number }[] = [];
+        let currentAssignee = '';
+        let currentGroup: any = null;
+
+        sorted.forEach(item => {
+            const assignee = item.assignee_name || item.asignado || 'Sin Asignar';
+
+            if (assignee !== currentAssignee) {
+                if (currentGroup) {
+                    groups.push(currentGroup);
+                }
+                currentAssignee = assignee;
+                currentGroup = {
+                    assignee: assignee,
+                    tickets: [],
+                    totalHours: 0
+                };
+            }
+
+            if (currentGroup) {
+                currentGroup.tickets.push(item);
+                currentGroup.totalHours += Number(item.horas) || 0;
+            }
+        });
+
+        if (currentGroup) {
+            groups.push(currentGroup);
+        }
+
+        return groups;
+    }, [detailsData]);
+
     if (loading && !dashboardData && months.length === 0) {
         return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Cargando...</div>;
     }
 
     return (
-        <div className="min-h-screen bg-slate-900 text-white p-8 flex flex-col">
-            <div className="max-w-7xl mx-auto">
-                <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-                    <div>
-                        <button
-                            onClick={() => navigate('/')}
-                            className="mb-2 text-slate-400 hover:text-white flex items-center gap-2 transition-colors text-sm"
-                        >
-                            ← Volver al Dashboard
-                        </button>
+        <div className="min-h-screen bg-[#0D1B2A] font-['Inter']">
+            {/* Header */}
+            <header className="bg-[#0D1B2A] border-b border-slate-700/30 sticky top-0 z-50 backdrop-blur-sm">
+                <div className="max-w-7xl mx-auto px-8 sm:px-10 lg:px-12">
+                    <div className="flex justify-between items-center h-16">
                         <div className="flex items-center gap-4">
-                            <img
-                                src={logo}
-                                alt="GPDesk Logo"
-                                className="h-10 object-contain"
-                            />
-                            <h1 className="text-3xl font-bold">{projectName}</h1>
-                        </div>
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                        <div className="relative">
-                            <select
-                                value={selectedMonth || ''}
-                                onChange={(e) => setSelectedMonth(e.target.value)}
-                                className="appearance-none bg-slate-800 border border-slate-700 hover:border-blue-500 text-white text-lg font-medium py-2 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer transition-all"
+                            <button
+                                onClick={() => navigate('/')}
+                                className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors duration-200 px-3 py-2 rounded-lg hover:bg-slate-800/50"
                             >
-                                {months.map(month => (
-                                    <option key={month} value={month}>{month}</option>
-                                ))}
-                            </select>
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
-                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
+                                <ArrowLeft className="w-4 h-4" />
+                                <span className="text-sm font-normal hidden sm:inline">Dashboard</span>
+                            </button>
+                            <div className="h-6 w-px bg-slate-700/40 mx-2"></div>
+                            <div className="flex items-center gap-3">
+                                <img
+                                    src="/gpartner_logo.png"
+                                    alt="GPartner Logo"
+                                    className="h-7 w-auto object-contain"
+                                />
+                                <div className="h-5 w-px bg-slate-700/40 mx-2"></div>
+                                <h1 className="text-xl font-semibold text-white">
+                                    {projectName || 'Cargando...'}
+                                </h1>
                             </div>
                         </div>
 
-                        <div className="h-8 w-px bg-slate-700 mx-2 hidden md:block"></div>
-
-                        <div className="flex items-center gap-4">
-                            <div className="text-right hidden md:block">
-                                <p className="text-white font-medium">{user?.nombre}</p>
-                                <p className="text-slate-400 text-xs">Conectado</p>
+                        <div className="flex items-center gap-6">
+                            {/* Project Selector */}
+                            <div className="relative">
+                                <select
+                                    value={selectedMonth || ''}
+                                    onChange={(e) => setSelectedMonth(e.target.value)}
+                                    className="appearance-none bg-slate-800/50 border border-slate-700/50 text-white py-2 pl-4 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent font-medium shadow-sm transition-all duration-200"
+                                >
+                                    {months.map(month => (
+                                        <option key={month} value={month}>
+                                            {/* Format YYYY-MM to MonthName YYYY safely avoiding timezone rollover */}
+                                            {new Date(`${month}-15T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                                        </option>
+                                    ))}
+                                </select>
+                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
+                                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
+                                </div>
                             </div>
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/20">
+
+                            <div className="text-right hidden md:block">
+                                <p className="text-sm font-medium text-white">{user?.nombre}</p>
+                                <p className="text-xs text-emerald-400/80 font-normal">Conectado</p>
+                            </div>
+                            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-blue-600/90 to-purple-600/90 flex items-center justify-center text-white text-sm font-semibold shadow-md ring-2 ring-slate-800/50">
                                 {user?.nombre?.charAt(0).toUpperCase() || 'U'}
                             </div>
                         </div>
                     </div>
-                </header>
+                </div>
+            </header>
 
+            <main className="max-w-7xl mx-auto px-8 sm:px-10 lg:px-12 py-16">
                 {/* KPI Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-slate-400 text-sm font-medium uppercase mb-2">Total Tickets</h3>
-                        <p className="text-3xl font-bold text-white">{dashboardData?.kpis.totalTickets}</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+                    {/* Total Tickets Card */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md relative overflow-hidden group hover:shadow-lg hover:shadow-blue-500/10 transition-all duration-300" style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem', paddingTop: '1.5rem', paddingBottom: '1.5rem' }}>
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity duration-300">
+                            <svg className="w-24 h-24 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>
+                        </div>
+                        <div className="flex items-center justify-between mb-4 relative z-10">
+                            <h3 className="text-slate-400 text-sm font-semibold uppercase tracking-wider">TOTAL TICKETS</h3>
+                        </div>
+                        <p className="text-5xl font-bold text-white relative z-10">{dashboardData?.kpis.totalTickets}</p>
                     </div>
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-slate-400 text-sm font-medium uppercase mb-2">Horas Totales</h3>
-                        <p className="text-3xl font-bold text-emerald-400">{dashboardData?.kpis.totalHours}h</p>
+
+                    {/* Total Hours Card */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md relative overflow-hidden group hover:shadow-lg hover:shadow-emerald-500/10 transition-all duration-300" style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem', paddingTop: '1.5rem', paddingBottom: '1.5rem' }}>
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity duration-300">
+                            <svg className="w-24 h-24 text-emerald-500" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" /></svg>
+                        </div>
+                        <div className="flex items-center justify-between mb-4 relative z-10">
+                            <h3 className="text-slate-400 text-sm font-semibold uppercase tracking-wider">HORAS TOTALES</h3>
+                        </div>
+                        <p className="text-5xl font-bold text-emerald-400/90 relative z-10">{dashboardData?.kpis.totalHours.toFixed(2)}h</p>
                     </div>
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-slate-400 text-sm font-medium uppercase mb-2">Tasa de Cierre</h3>
-                        <p className="text-3xl font-bold text-blue-400">{dashboardData?.kpis.completionRate}</p>
+
+                    {/* Closure Rate Card */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md relative overflow-hidden group hover:shadow-lg hover:shadow-purple-500/10 transition-all duration-300" style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem', paddingTop: '1.5rem', paddingBottom: '1.5rem' }}>
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity duration-300">
+                            <svg className="w-24 h-24 text-blue-500" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" /></svg>
+                        </div>
+                        <div className="flex items-center justify-between mb-4 relative z-10">
+                            <h3 className="text-slate-400 text-sm font-semibold uppercase tracking-wider">TASA DE CIERRE</h3>
+                        </div>
+                        <p className="text-5xl font-bold text-blue-400/90 relative z-10">{dashboardData?.kpis.completionRate}%</p>
                     </div>
                 </div>
 
                 {/* Charts Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Status Cards (Replacing Pie Chart) */}
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-lg font-semibold mb-6">Tickets por Estado</h3>
-                        <div className="grid grid-cols-2 gap-4">
-                            {dashboardData?.status.map((item: any, index: number) => {
-                                const Icon = item.icon;
+                <div id="charts-container" className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Tickets by Status */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md" style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                        <h3 className="text-lg font-bold mb-6 text-white">Tickets por Estado</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {dashboardData?.status.map((item: any) => {
+                                // Determine colors based on status
+                                let colorClass = 'text-slate-400';
+                                let borderClass = 'border-slate-700';
+                                let iconBgClass = 'bg-slate-800';
+                                let bgGradient = 'bg-gradient-to-br from-slate-800 to-slate-900';
+
+                                if (item.name === 'Bloqueado') {
+                                    colorClass = 'text-red-500';
+                                    iconBgClass = 'bg-red-500/10';
+                                    borderClass = 'border-red-500/30';
+                                    bgGradient = 'bg-gradient-to-br from-slate-800 to-red-900/10';
+                                } else if (item.name === 'Cerrado') {
+                                    colorClass = 'text-emerald-500';
+                                    iconBgClass = 'bg-emerald-500/10';
+                                    borderClass = 'border-emerald-500/30';
+                                    bgGradient = 'bg-gradient-to-br from-slate-800 to-emerald-900/10';
+                                } else if (item.name === 'Pruebas de usuario') {
+                                    colorClass = 'text-yellow-500';
+                                    iconBgClass = 'bg-yellow-500/10';
+                                    borderClass = 'border-yellow-500/30';
+                                    bgGradient = 'bg-gradient-to-br from-slate-800 to-yellow-900/10';
+                                } else if (item.name === 'Trabajo en curso') {
+                                    colorClass = 'text-blue-500';
+                                    iconBgClass = 'bg-blue-500/10';
+                                    borderClass = 'border-blue-500/30';
+                                    bgGradient = 'bg-gradient-to-br from-slate-800 to-blue-900/10';
+                                } else if (item.name === 'Cancelado') {
+                                    colorClass = 'text-slate-400';
+                                    iconBgClass = 'bg-slate-700/50';
+                                    borderClass = 'border-slate-600';
+                                }
+
                                 return (
-                                    <div key={index} className="bg-slate-900/50 p-4 rounded-lg border border-slate-700/50 flex items-center justify-between">
-                                        <div>
-                                            <span className={`text-xs font-bold uppercase mb-1 block ${item.color}`}>{item.name}</span>
-                                            <span className="text-2xl font-bold text-white">{item.value}</span>
+                                    <div key={item.name} className={`rounded-xl border ${borderClass} ${bgGradient} relative overflow-hidden group hover:scale-[1.02] transition-all duration-300 shadow-lg flex items-center justify-between`} style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                                        <div className="flex flex-col gap-4 z-10">
+                                            <span className={`text-sm font-bold uppercase tracking-wider ${colorClass}`}>
+                                                {item.name}
+                                            </span>
+                                            <span className="text-5xl font-bold text-white tracking-tight">{item.value}</span>
                                         </div>
-                                        <div className={`p-3 rounded-full bg-slate-800/50 ${item.color.replace('text-', 'bg-').replace('500', '500/20').replace('400', '400/20')}`}>
-                                            <Icon className={`w-6 h-6 ${item.color}`} />
+
+                                        <div className={`p-4 rounded-full ${iconBgClass} ${colorClass} flex items-center justify-center z-10`}>
+                                            {React.cloneElement(getStatusIcon(item.name), { className: "w-8 h-8" })}
                                         </div>
                                     </div>
                                 );
+
                             })}
                         </div>
                     </div>
 
-                    {/* Priority Chart */}
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-lg font-semibold mb-6">Tickets por Prioridad</h3>
-                        <div className="h-64">
+                    {/* Tickets by Priority */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md" style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                        <h3 className="text-lg font-bold mb-6 text-white">Tickets por Prioridad</h3>
+                        <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart
-                                    data={dashboardData?.priority}
-                                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                                >
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                    <XAxis dataKey="name" stroke="#94a3b8" />
-                                    <YAxis stroke="#94a3b8" />
+                                <BarChart data={dashboardData?.priority} margin={{ top: 20, right: 40, left: 40, bottom: 20 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
                                     <Tooltip
-                                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
-                                        itemStyle={{ color: '#f8fafc' }}
-                                        cursor={{ fill: '#334155', opacity: 0.4 }}
-                                        formatter={(value: any, name: any, props: any) => {
-                                            return [`${value} (${Number(props.payload.pct).toFixed(2)}%)`, name];
+                                        cursor={{ fill: 'rgba(51, 65, 85, 0.4)' }}
+                                        contentStyle={{
+                                            backgroundColor: '#0f172a',
+                                            border: '2px solid #3b82f6',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
                                         }}
+                                        labelStyle={{ color: '#ffffff', fontWeight: 'bold', marginBottom: '8px' }}
+                                        itemStyle={{ color: '#e2e8f0' }}
                                     />
-                                    <Bar dataKey="value">
-                                        <LabelList dataKey="pct" position="top" formatter={(val: any) => `${Number(val).toFixed(2)}%`} fill="#f8fafc" />
-                                        {dashboardData?.priority?.map((entry: any, index: number) => (
+                                    <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                                        {dashboardData?.priority.map((entry: any, index: number) => (
                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                         ))}
+                                        <LabelList dataKey="pct" position="top" formatter={(value: any) => `${value}%`} style={{ fill: '#94a3b8', fontSize: '12px', fontWeight: '600' }} />
                                     </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
                     </div>
 
-                    {/* Type Chart (Pie) */}
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-lg font-semibold mb-6">Tickets por Tipo</h3>
-                        <div className="h-80">
+                    {/* Tickets by Type */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md" style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                        <h3 className="text-lg font-bold mb-6 text-white">Tickets por Tipo</h3>
+                        <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                     <Pie
@@ -1017,88 +1210,106 @@ export const ProjectAnalytics = () => {
                                         cy="50%"
                                         labelLine={true}
                                         label={({ percent }: any) => `${(percent * 100).toFixed(2)}%`}
-                                        outerRadius={100}
+                                        outerRadius={90}
                                         fill="#8884d8"
                                         dataKey="value"
+                                        nameKey="name"
                                     >
-                                        {dashboardData?.type?.map((entry: any, index: number) => (
+                                        {dashboardData?.type.map((entry: any, index: number) => (
                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                         ))}
                                     </Pie>
                                     <Tooltip
-                                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
-                                        itemStyle={{ color: '#f8fafc' }}
+                                        contentStyle={{
+                                            backgroundColor: '#0f172a',
+                                            border: '2px solid #3b82f6',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
+                                        }}
+                                        labelStyle={{ color: '#ffffff', fontWeight: 'bold' }}
+                                        itemStyle={{ color: '#e2e8f0' }}
                                     />
-                                    <Legend verticalAlign="bottom" height={36} />
+                                    <Legend
+                                        verticalAlign="bottom"
+                                        height={36}
+                                        iconType="circle"
+                                        formatter={(value) => <span className="text-slate-300 text-sm ml-2">{value}</span>}
+                                    />
                                 </PieChart>
                             </ResponsiveContainer>
                         </div>
                     </div>
 
-                    {/* Module Hours Chart (Horizontal Bar) */}
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                        <h3 className="text-lg font-semibold mb-6">Horas por Módulo</h3>
-                        <div className="h-96">
+                    {/* Hours by Module */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 shadow-md" style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                        <h3 className="text-lg font-bold mb-6 text-white">Horas por Módulo</h3>
+                        <div className="h-[400px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart
                                     layout="vertical"
                                     data={dashboardData?.module}
-                                    margin={{ top: 5, right: 50, left: 40, bottom: 5 }}
+                                    margin={{ top: 20, right: 50, left: 100, bottom: 20 }}
                                 >
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                                    <XAxis type="number" stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#334155" />
+                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
                                     <YAxis
-                                        dataKey="name"
                                         type="category"
-                                        stroke="#94a3b8"
-                                        tick={{ fontSize: 11 }}
-                                        width={150}
+                                        dataKey="name"
+                                        width={90}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        tick={{ fill: '#94a3b8', fontSize: 11 }}
                                     />
                                     <Tooltip
-                                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
-                                        itemStyle={{ color: '#f8fafc' }}
-                                        cursor={{ fill: '#334155', opacity: 0.4 }}
-                                        formatter={(value: any) => [`${value} horas`, 'Horas']}
+                                        cursor={{ fill: 'rgba(51, 65, 85, 0.4)' }}
+                                        contentStyle={{
+                                            backgroundColor: '#0f172a',
+                                            border: '2px solid #3b82f6',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
+                                        }}
+                                        labelStyle={{ color: '#ffffff', fontWeight: 'bold', marginBottom: '8px' }}
+                                        itemStyle={{ color: '#e2e8f0' }}
                                     />
-                                    <Bar dataKey="value" fill="#06b6d4" radius={[0, 4, 4, 0]} barSize={20}>
-                                        <LabelList
-                                            dataKey="value"
-                                            position="right"
-                                            fill="#94a3b8"
-                                            fontSize={11}
-                                            formatter={(value: any) => {
-                                                const total = dashboardData?.module?.reduce((acc: number, curr: any) => acc + curr.value, 0) || 0;
-                                                const percent = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
-                                                return `${value} (${percent}%)`;
-                                            }}
-                                        />
+                                    <Bar dataKey="value" fill="#0ea5e9" radius={[0, 4, 4, 0]} barSize={20} label={{ position: 'right', fill: '#fff', formatter: (value: any) => `${value}%` }}>
                                     </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
                     </div>
 
-                    {/* Assignee Chart (Moved to Bottom, Full Width) */}
-                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 lg:col-span-2">
-                        <h3 className="text-lg font-semibold mb-6">Tickets por Asignado</h3>
-                        <div className="h-64">
+                    {/* Assignee Chart */}
+                    <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 lg:col-span-2 shadow-md" style={{ paddingLeft: '2rem', paddingRight: '2rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
+                        <h3 className="text-lg font-bold mb-6 text-white">Tickets por Asignado</h3>
+                        <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={dashboardData?.assignee} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <BarChart data={dashboardData?.assignee} margin={{ top: 20, right: 40, left: 40, bottom: 60 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                                     <XAxis
                                         dataKey="name"
                                         stroke="#94a3b8"
-                                        tick={{ fontSize: 11 }}
+                                        fontSize={11}
                                         interval={0}
                                         angle={-25}
                                         textAnchor="end"
                                         height={60}
+                                        tickLine={false}
+                                        axisLine={false}
                                     />
-                                    <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                                    <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
                                     <Tooltip
-                                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
-                                        itemStyle={{ color: '#f8fafc' }}
-                                        cursor={{ fill: '#334155', opacity: 0.4 }}
+                                        contentStyle={{
+                                            backgroundColor: '#0f172a',
+                                            border: '2px solid #3b82f6',
+                                            borderRadius: '8px',
+                                            padding: '12px',
+                                            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
+                                        }}
+                                        labelStyle={{ color: '#ffffff', fontWeight: 'bold', marginBottom: '8px' }}
+                                        itemStyle={{ color: '#e2e8f0' }}
+                                        cursor={{ fill: 'rgba(51, 65, 85, 0.4)', opacity: 0.5 }}
                                         formatter={(value: any, name: any, props: any) => {
                                             if (name === 'tickets') {
                                                 return [
@@ -1112,15 +1323,15 @@ export const ProjectAnalytics = () => {
                                             return [value, name];
                                         }}
                                     />
-                                    <Bar dataKey="tickets">
+                                    <Bar dataKey="tickets" radius={[8, 8, 0, 0]}>
                                         <LabelList
                                             dataKey="pctIssues"
                                             position="top"
                                             formatter={(val: any) => `${Number(val).toFixed(1)}%`}
-                                            fill="#f8fafc"
-                                            style={{ fontSize: '10px' }}
+                                            fill="#e2e8f0"
+                                            style={{ fontSize: '11px', fontWeight: 'bold' }}
                                         />
-                                        {dashboardData?.assignee?.map((entry: any, index: number) => (
+                                        {dashboardData?.assignee?.map((_entry: any, index: number) => (
                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                         ))}
                                     </Bar>
@@ -1131,70 +1342,87 @@ export const ProjectAnalytics = () => {
                 </div>
 
                 {/* Detailed Hours Table */}
-                <div className="mt-8 bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <div className="flex justify-between items-center mb-6">
+                {/* Detailed Hours Table */}
+                <div className="mt-8 bg-slate-800 rounded-xl border border-slate-700 shadow-lg" style={{ paddingLeft: '1.5rem', paddingRight: '1.5rem', paddingTop: '1.5rem', paddingBottom: '1.5rem' }}>
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-10">
                         <div className="flex items-center gap-4">
-                            <h3 className="text-lg font-semibold">Detalle de Horas</h3>
-                            <div className="bg-slate-700 px-3 py-1 rounded-full text-sm">
-                                <span className="text-slate-400 mr-2">Total:</span>
+                            <h3 className="text-lg font-bold text-white">Detalle de Horas</h3>
+                            <div className="bg-slate-900 px-6 py-3 rounded-full text-lg border border-slate-700">
+                                <span className="text-slate-400 mr-3">Total:</span>
                                 <span className="font-bold text-emerald-400">{totalHoursDetails.toFixed(2)}h</span>
                             </div>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
                             <button
                                 onClick={generatePDF}
-                                className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                                className="flex items-center justify-center gap-2 bg-blue-600/90 hover:bg-blue-600 text-white px-6 py-3 rounded-lg transition-all duration-200 text-sm font-medium shadow-md hover:shadow-lg hover:shadow-blue-600/20 active:scale-95 w-full sm:w-auto"
                             >
                                 <FileText className="w-4 h-4" />
-                                Generar Informe PDF
+                                Generar PDF
                             </button>
                             <button
                                 onClick={handleDownload}
                                 disabled={!detailsData || detailsData.length === 0}
-                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                                className="flex items-center justify-center gap-2 border border-slate-600/50 hover:border-slate-500 bg-transparent hover:bg-slate-800/50 text-slate-300 hover:text-white px-6 py-3 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium active:scale-95 w-full sm:w-auto"
                             >
                                 <Download className="w-4 h-4" />
-                                Descargar Excel
+                                Exportar Excel
                             </button>
                         </div>
                     </div>
 
-                    <div className="overflow-auto max-h-[600px] border border-slate-700 rounded-lg">
-                        <table className="w-full text-left border-collapse relative">
-                            <thead className="sticky top-0 bg-slate-800 z-10 shadow-sm">
-                                <tr className="border-b border-slate-700 text-slate-400 text-sm uppercase">
-                                    <th className="py-3 px-4 whitespace-nowrap bg-slate-800">Clave</th>
-                                    <th className="py-3 px-4 whitespace-nowrap bg-slate-800">Asignado</th>
-                                    <th className="py-3 px-4 whitespace-nowrap bg-slate-800">Mes</th>
-                                    <th className="py-3 px-4 whitespace-nowrap bg-slate-800 text-right">Horas</th>
-                                </tr>
-                            </thead>
-                            <tbody className="text-slate-300">
-                                {detailsData.length > 0 ? (
-                                    detailsData.map((item, index) => (
-                                        <tr key={index} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
-                                            <td className="py-3 px-4 whitespace-nowrap font-medium text-blue-400">{item.clave}</td>
-                                            <td className="py-3 px-4 whitespace-nowrap">{item.assignee_name}</td>
-                                            <td className="py-3 px-4 whitespace-nowrap">{selectedMonth}</td>
-                                            <td className="py-3 px-4 whitespace-nowrap text-right">{Number(item.horas).toFixed(2)}</td>
-                                        </tr>
-                                    ))
-                                ) : (
-                                    <tr>
-                                        <td colSpan={4} className="py-8 text-center text-slate-500">
-                                            No hay registros de horas para este mes.
-                                        </td>
+
+                    <div className="overflow-hidden border border-slate-700 rounded-xl bg-slate-800/50 backdrop-blur-sm">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse min-w-[600px]">
+                                <thead className="sticky top-0 bg-slate-900/95 backdrop-blur z-10">
+                                    <tr className="border-b border-slate-700 text-slate-300 text-xs font-bold uppercase tracking-wider">
+                                        <th className="py-4 px-6 whitespace-nowrap">Clave</th>
+                                        <th className="py-4 px-6 whitespace-nowrap">Asignado</th>
+                                        <th className="py-4 px-6 whitespace-nowrap hidden sm:table-cell">Mes</th>
+                                        <th className="py-4 px-6 whitespace-nowrap text-right">Horas</th>
                                     </tr>
-                                )}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-slate-700">
+                                    {groupedDetails.length > 0 ? (
+                                        groupedDetails.map((group, groupIndex) => (
+                                            <React.Fragment key={group.assignee}>
+                                                {/* Map through tickets in the group */}
+                                                {group.tickets.map((row: any, rowIndex: number) => (
+                                                    <tr key={`${groupIndex}-${rowIndex}`} className="hover:bg-slate-700/30 transition-colors duration-150 even:bg-slate-800/20">
+                                                        <td className="py-4 px-6 text-blue-400/90 font-medium">{row.clave}</td>
+                                                        <td className="py-4 px-6 text-slate-300">{row.assignee_name || row.asignado}</td>
+                                                        <td className="py-4 px-6 text-slate-400 hidden sm:table-cell">{selectedMonth}</td>
+                                                        <td className="py-4 px-6 text-right font-mono text-slate-300">{Number(row.horas).toFixed(2)}</td>
+                                                    </tr>
+                                                ))}
+                                                {/* Subtotal Row */}
+                                                <tr className="bg-slate-800/80 font-semibold text-slate-200">
+                                                    <td colSpan={1} className="py-3 px-6 text-right hidden sm:table-cell"></td>
+                                                    <td colSpan={2} className="py-3 px-6 text-left text-emerald-400">Total {group.assignee}:</td>
+                                                    <td className="py-3 px-6 text-right font-mono text-emerald-400 border-t border-slate-600/50">
+                                                        {group.totalHours.toFixed(2)}h
+                                                    </td>
+                                                </tr>
+                                            </React.Fragment>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan={4} className="py-8 text-center text-slate-500">
+                                                No hay datos disponibles para el mes seleccionado
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </main>
             <div className="mt-auto pt-12">
                 <Footer />
             </div>
-        </div>
+        </div >
     );
 };
 
