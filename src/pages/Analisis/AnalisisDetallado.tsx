@@ -1,247 +1,102 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Search, Download, FileText } from 'lucide-react';
 import { useFilters } from '../../contexts/FilterContext';
-import { supabase } from '../../lib/supabase';
+import { useProjectData, useActiveIssuesMetadata } from '../../hooks/useProjectData';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import logo from '../../assets/logo-new.png';
 
-interface ModuleDetail {
-    module: string;
-    tickets: number;
-    hours: number;
-    avg_hours: number;
-}
-
-interface IssueSummary {
-    key: string;
-    summary: string;
-    status: string;
-    priority: string;
-    assignee: string;
-    type: string;
-    hours: number;
-}
-
 const AnalisisDetallado: React.FC = () => {
     const { id } = useParams();
     const { selectedMonth } = useFilters();
-    const [loading, setLoading] = useState(true);
-    const [projectJiraId, setProjectJiraId] = useState<string | null>(null);
-    const [moduleDetails, setModuleDetails] = useState<ModuleDetail[]>([]);
-    const [consultantData, setConsultantData] = useState<any[]>([]);
-    const [issueSummary, setIssueSummary] = useState<IssueSummary[]>([]);
-    const [statusData, setStatusData] = useState<any[]>([]);
-    const [priorityData, setPriorityData] = useState<any[]>([]);
-    const [typeData, setTypeData] = useState<any[]>([]);
-    const [topTicketsData, setTopTicketsData] = useState<any[]>([]);
-    const [issuesCalendarData, setIssuesCalendarData] = useState<any[]>([]);
-    const [detailsData, setDetailsData] = useState<any[]>([]);
-    const [projectContractedHours, setProjectContractedHours] = useState<number>(70);
-    const [projectName, setProjectName] = useState('');
 
-    useEffect(() => {
-        const fetchProjectData = async () => {
-            if (!id) return;
-            const { data } = await supabase
-                .from('proyectos')
-                .select('jira_id, nombre, horas_contratadas')
-                .eq('id', id)
-                .single();
-            if (data) {
-                setProjectJiraId((data as any).jira_id);
-                setProjectName((data as any).nombre);
-                setProjectContractedHours(Number((data as any).horas_contratadas) || 70);
-            }
-        };
-        fetchProjectData();
-    }, [id]);
+    // 1. Fetch Data
+    const { data, isLoading: dataLoading } = useProjectData(id, selectedMonth);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            if (!projectJiraId || !selectedMonth) return;
+    // 2. Active Issues Logic (for "Resumen de Issues" table)
+    const uniqueKeys = useMemo(() => {
+        if (!data?.detailsData) return [];
+        const keys = new Set<string>();
+        data.detailsData.forEach((d: any) => {
+            const key = d.clave || d.ticket_key;
+            if (key) keys.add(key);
+        });
+        return Array.from(keys);
+    }, [data?.detailsData]);
 
-            setLoading(true);
-            try {
-                const monthDate = `${selectedMonth}-01`;
+    const { data: activeIssuesMetadata = [], isLoading: issuesLoading } = useActiveIssuesMetadata(id, uniqueKeys);
 
-                // Fetch module details
-                const { data: moduleResult } = await supabase
-                    .from('v_horas_mes_modulo_proyecto')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate);
+    const loading = dataLoading || issuesLoading;
 
-                // Fetch consultant data for detailed view
-                const { data: consultantResult } = await supabase
-                    .from('v_issues_mes_proyecto_asignacion')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate);
-
-                // Process module data
-                const processedModules = moduleResult?.map((d: any) => ({
-                    module: d.modulo || d.module || 'Unknown',
-                    tickets: Number(d.total_issues) || Number(d.total_tickets) || 0,
-                    hours: Number(d.total_horas) || 0,
-                    avg_hours: (Number(d.total_horas) || 0) / Math.max(Number(d.total_issues) || Number(d.total_tickets) || 1, 1)
-                })) || [];
-
-                setModuleDetails(processedModules);
-
-                // Process consultant data
-                const processedConsultants = consultantResult?.map((d: any) => ({
-                    name: d.asignado || d.assignee_name || 'Unknown',
-                    tickets: Number(d.total_issues) || 0,
-                    hours: Number(d.total_horas) || 0,
-                    pct_tickets: Number(d.porcentaje_issues) || 0,
-                    pct_hours: Number(d.porcentaje_horas) || 0
-                })) || [];
-
-                setConsultantData(processedConsultants);
-
-                // Fetch status data for PDF
-                const { data: statusResult } = await supabase
-                    .from('v_issues_mes_proyecto_estado')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate);
-
-                setStatusData(statusResult || []);
-
-                // Fetch issue summary from issues table manually (fallback for v_issues_resumen)
-                const startDate = `${selectedMonth}-01`;
-
-                // Fetch detailed hours (worklogs) first - this determines the issues worked on in this period
-                const { data: detailsResult } = await supabase
-                    .from('v_horas_totales_detalles')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate)
-                    .order('created_at_jira', { ascending: false });
-
-                setDetailsData(detailsResult || []);
-
-                // Create a map of hours per issue and unique keys
-                const hoursMap = new Map();
-                const uniqueKeys = new Set<string>();
-
-                detailsResult?.forEach((d: any) => {
-                    const key = d.clave || d.ticket_key;
-                    if (key) {
-                        hoursMap.set(key, (hoursMap.get(key) || 0) + (Number(d.horas) || 0));
-                        uniqueKeys.add(key);
-                    }
-                });
-
-                // Fetch metadata ONLY for issues that have worklogs in this period
-                let issuesList: any[] = [];
-                if (uniqueKeys.size > 0) {
-                    const { data } = await supabase
-                        .from('issues')
-                        .select('*')
-                        .in('clave', Array.from(uniqueKeys));
-                    issuesList = data || [];
-                }
-
-                // Map issues to summary format
-                const processedIssues = issuesList?.map((d: any) => ({
-                    key: d.clave || d.key || 'N/A',
-                    summary: d.resumen || d.summary || 'N/A',
-                    status: d.estado || d.status || 'N/A',
-                    priority: d.prioridad || d.prioridad || 'N/A',
-                    assignee: d.asignado || d.assignee || 'N/A',
-                    type: d.tipo || d.issuetype || 'N/A',
-                    hours: hoursMap.get(d.clave || d.key) || 0,
-                    module: d.modulo || d.componente || 'General' // Try to capture module
-                })) || [];
-
-                setIssueSummary(processedIssues);
-
-                // Re-process module details to include ticket counts from issues if possible
-                // If v_horas_mes_modulo_proyecto lacks tickets, we calculate from issues list
-                const moduleTicketCounts = new Map();
-                processedIssues.forEach(issue => {
-                    const mod = issue.module || 'Unknown';
-                    moduleTicketCounts.set(mod, (moduleTicketCounts.get(mod) || 0) + 1);
-                });
-
-                // Update moduleDetails with calculated tickets if original was 0
-                const updatedModules = processedModules.map(m => {
-                    const calculatedTickets = moduleTicketCounts.get(m.module) || 0;
-                    return {
-                        ...m,
-                        tickets: m.tickets > 0 ? m.tickets : calculatedTickets,
-                        // Recalculate avg if tickets changed
-                        avg_hours: m.hours / Math.max((m.tickets > 0 ? m.tickets : calculatedTickets), 1)
-                    };
-                });
-
-                // If the original module result was empty but we have issues, we might want to construct module list from issues
-                // But for now, let's just update the existing ones or append? 
-                // Let's stick to updating existing ones from the view to be safe, 
-                // or if view returned modules, we trust it for hours.
-                setModuleDetails(updatedModules);
-
-                // Fetch priority data for PDF Page 2
-                const { data: priorityResult } = await supabase
-                    .from('v_tickets_mes_proyecto_prioridad_pct')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate);
-
-                setPriorityData(priorityResult || []);
-
-                // Fetch type data for PDF Page 2
-                const { data: typeResult } = await supabase
-                    .from('v_issues_mes_proyecto_tipo')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate);
-
-                setTypeData(typeResult || []);
-
-                // Fetch top tickets for PDF Page 3
-                const { data: topTicketsResult } = await supabase
-                    .from('v_horas_totales_por_proyecto_ticket')
-                    .select('*')
-                    .eq('proyecto', projectJiraId)
-                    .eq('mes', monthDate)
-                    .order('ticket_horas', { ascending: false })
-                    .limit(5);
-
-                setTopTicketsData(topTicketsResult || []);
-
-                // Fetch issues for calendar (PDF Page 3)
-                const [year, month] = selectedMonth.split('-').map(Number);
-                const nextMonth = month === 12 ? 1 : month + 1;
-                const nextYear = month === 12 ? year + 1 : year;
-                const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-
-
-                const { data: calendarIssuesResult } = await supabase
-                    .from('issues')
-                    .select('clave, fechacreacion')
-                    .eq('proyecto', projectJiraId)
-                    .gte('fechacreacion', startDate)
-                    .lt('fechacreacion', endDate);
-
-                setIssuesCalendarData(calendarIssuesResult || []);
-
-                // setDetailsData already set above
-
-
-            } catch (error) {
-                console.error('Error fetching analysis data:', error);
-            } finally {
-                setLoading(false);
-            }
+    // 3. Derived State
+    const { moduleDetails, consultantData, issueSummary, statusData, priorityData, typeData, topTicketsData, issuesCalendarData, detailsData, projectInfo } = useMemo(() => {
+        if (!data) return {
+            moduleDetails: [], consultantData: [], issueSummary: [],
+            statusData: [], priorityData: [], typeData: [],
+            topTicketsData: [], issuesCalendarData: [], detailsData: [], projectInfo: null
         };
 
-        fetchData();
-    }, [projectJiraId, selectedMonth]);
+        const {
+            moduleData, assigneeData, statusData, priorityData, typeData,
+            topTickets, calendarIssues, detailsData, projectInfo
+        } = data;
+
+        // Process Module Data
+        const processedModules = moduleData?.map((d: any) => ({
+            module: d.modulo || d.module || 'Unknown',
+            tickets: Number(d.tickets) || Number(d.total_issues) || Number(d.total_tickets) || 0,
+            hours: Number(d.total_horas) || 0,
+            avg_hours: (Number(d.total_horas) || 0) / Math.max(Number(d.tickets) || Number(d.total_issues) || Number(d.total_tickets) || 1, 1)
+        })) || [];
+
+        // Process Consultant Data
+        const processedConsultants = assigneeData?.map((d: any) => ({
+            name: d.asignado || d.assignee_name || 'Unknown',
+            tickets: Number(d.total_issues) || 0,
+            hours: Number(d.total_horas) || 0,
+            pct_tickets: Number(d.porcentaje_issues) || 0,
+            pct_hours: Number(d.porcentaje_horas) || 0
+        })) || [];
+
+        // Process Issue Summary (Resumen table)
+        const hoursMap = new Map();
+        detailsData?.forEach((d: any) => {
+            const key = d.clave || d.ticket_key;
+            if (key) hoursMap.set(key, (hoursMap.get(key) || 0) + (Number(d.horas) || 0));
+        });
+
+        const summary = activeIssuesMetadata.map((d: any) => ({
+            key: d.clave || d.key || 'N/A',
+            summary: d.resumen || d.summary || 'N/A',
+            status: d.estado || d.status || 'N/A',
+            priority: d.priorida || d.prioridad || d.priority || 'N/A', // 'priorida' seems to be the column in issues table
+            assignee: d.assignee_name || d.asignado || d.assignee || 'N/A',
+            type: d.tipo || d.issuetype || 'N/A',
+            hours: hoursMap.get(d.clave || d.key) || 0,
+            module: d.modulo || d.componente || 'General'
+        }));
+
+        // Handle module ticket count discrepancy using active issues if needed
+        // (Simplified: trusting view data for now, but if issues have module info, we could aggregate)
+
+        return {
+            moduleDetails: processedModules,
+            consultantData: processedConsultants,
+            issueSummary: summary,
+            statusData: statusData || [],
+            priorityData: priorityData || [],
+            typeData: typeData || [],
+            topTicketsData: topTickets || [],
+            issuesCalendarData: calendarIssues || [],
+            detailsData: detailsData || [],
+            projectInfo
+        };
+    }, [data, activeIssuesMetadata]);
+
+    const projectName = projectInfo?.nombre || '';
+    const projectContractedHours = Number(projectInfo?.horas_contratadas) || 70;
 
     // Export to Excel
     const exportToExcel = () => {
@@ -807,7 +662,7 @@ const AnalisisDetallado: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-[#0D1B2A]" style={{ padding: '2rem' }}>
-            <div className="max-w-7xl mx-auto">
+            <div className="w-full max-w-[1800px] mx-auto">
                 {/* Header with Export Buttons */}
                 <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-4">
@@ -860,8 +715,8 @@ const AnalisisDetallado: React.FC = () => {
                             <tbody>
                                 {issueSummary.map((issue, index) => (
                                     <tr key={index} className="border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors">
-                                        <td className="py-3 px-4 text-cyan-400 font-mono text-sm">{issue.key}</td>
-                                        <td className="py-3 px-4 text-white max-w-xs truncate" title={issue.summary}>
+                                        <td className="py-3 px-4 text-cyan-400 font-mono text-sm whitespace-nowrap">{issue.key}</td>
+                                        <td className="py-3 px-4 text-white max-w-xl truncate" title={issue.summary}>
                                             {issue.summary}
                                         </td>
                                         <td className="py-3 px-4">

@@ -3,7 +3,7 @@ import { Outlet, useParams, useNavigate } from 'react-router-dom';
 import { Calendar, Home, LogOut, ChevronRight } from 'lucide-react';
 import Sidebar from '../Sidebar/Sidebar';
 import { useFilters } from '../../contexts/FilterContext';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { Footer } from '../Footer';
 

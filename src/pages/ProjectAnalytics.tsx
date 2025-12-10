@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { useProjectData, useProjectMonths } from '../hooks/useProjectData';
 import {
     BarChart,
     Bar,
@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import html2canvas from 'html2canvas';
+
 import * as XLSX from 'xlsx';
 import logo from '../assets/logo-new.png';
 import { Footer } from '../components/Footer';
@@ -45,14 +45,6 @@ const getStatusIcon = (status: string) => {
     }
 };
 
-const getPriorityColor = (priority: string) => {
-    switch (priority) {
-        case 'Alta': return '#ef4444'; // red-500
-        case 'Media': return '#eab308'; // yellow-500
-        case 'Baja': return '#3b82f6'; // blue-500
-        default: return '#94a3b8'; // slate-400
-    }
-};
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -68,304 +60,104 @@ export const ProjectAnalytics = () => {
     const { projectId } = useParams();
     const navigate = useNavigate();
     const { user } = useAuth();
-    const [months, setMonths] = useState<string[]>([]);
+
+    // UI State
     const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [dashboardData, setDashboardData] = useState<any>(null);
-    const [detailsData, setDetailsData] = useState<any[]>([]);
 
-    const [statusData, setStatusData] = useState<any[]>([]);
-    const [typeData, setTypeData] = useState<any[]>([]);
-    const [issuesData, setIssuesData] = useState<any[]>([]);
-    const [topTicketsData, setTopTicketsData] = useState<any[]>([]);
-    const [consultantData, setConsultantData] = useState<any[]>([]);
-    const [moduleDataPDF, setModuleDataPDF] = useState<any[]>([]);
-    const [projectName, setProjectName] = useState('');
-    const [projectJiraId, setProjectJiraId] = useState<string | null>(null);
-    const [projectContractedHours, setProjectContractedHours] = useState<number>(50);
+    // 1. Fetch Months
+    const { data: months = [], isLoading: monthsLoading } = useProjectMonths(projectId);
 
-    // Fetch available months and project details
+    // Auto-select first month
     useEffect(() => {
-        const fetchInitialData = async () => {
-            if (!projectId) return;
+        if (months && months.length > 0 && !selectedMonth) {
+            setSelectedMonth(months[0]);
+        }
+    }, [months, selectedMonth]);
 
-            try {
-                // Get Project Name and Jira ID
-                const { data: project } = await supabase
-                    .from('proyectos')
-                    .select('nombre, jira_id, horas_contratadas')
-                    .eq('id', projectId)
-                    .single();
+    // 2. Fetch Project Data
+    const { data, isLoading: dataLoading } = useProjectData(projectId, selectedMonth);
+    const loading = monthsLoading || dataLoading;
 
-                let currentJiraId = null;
-                if (project) {
-                    setProjectName(project.nombre);
-                    const p = project as any;
-                    setProjectJiraId(p.jira_id);
-                    setProjectContractedHours(Number(p.horas_contratadas) || 50);
-                    currentJiraId = p.jira_id;
-                }
+    // Derived Data (Memoized)
+    const dashboardData = useMemo(() => {
+        if (!data) return null;
 
-                if (currentJiraId) {
-                    // Get available months from v_horas_mes_proyecto
-                    const { data: monthData, error } = await supabase
-                        .from('v_horas_mes_proyecto')
-                        .select('mes')
-                        .eq('proyecto', currentJiraId);
+        const {
+            statusData,
+            priorityData,
+            assigneeData,
+            typeData,
+            moduleData,
+            totalHours
+        } = data;
 
-                    if (error) {
-                        console.warn('Error fetching months from view:', error);
-                        // Fallback only if error
-                        setMonths(['2025-09', '2025-08', '2025-07']);
-                    } else if (monthData && monthData.length > 0) {
-                        // Supabase returns dates as strings like "2025-12-01"
-                        // Extract YYYY-MM from each date string
-                        const uniqueMonths = Array.from(new Set(monthData.map((item: any) => {
-                            const dateStr = typeof item.mes === 'string' ? item.mes : String(item.mes);
-                            return dateStr.substring(0, 7); // Extract YYYY-MM
-                        })));
+        const FIXED_STATUSES = [
+            'Bloqueado',
+            'Cancelado',
+            'Cerrado',
+            'Pruebas de usuario',
+            'Trabajo en curso'
+        ];
 
-                        const sortedMonths = uniqueMonths.sort().reverse();
-                        setMonths(sortedMonths);
-                        if (sortedMonths.length > 0) {
-                            setSelectedMonth(sortedMonths[0]);
-                        }
-                    } else {
-                        setMonths([]);
-                    }
-                }
-            } catch (err) {
-                console.error('Error fetching initial data:', err);
-            } finally {
-                setLoading(false);
+        const statusMap = new Map(statusData?.map((d: any) => [d.estado || d.status, Number(d.total_issues) || Number(d.total_tickets)]) || []);
+
+        const mergedStatusData = FIXED_STATUSES.map(status => {
+            const config = STATUS_CONFIG[status] || { color: 'text-slate-400', icon: HelpCircle, label: status };
+            return {
+                name: status,
+                value: statusMap.get(status) || 0,
+                ...config
+            };
+        });
+
+        // Calculate Completion Rate
+        const totalTickets = statusData?.reduce((sum: number, d: any) => sum + (Number(d.total_issues) || Number(d.total_tickets) || 0), 0) || 0;
+        const closedTickets = statusMap.get('Cerrado') || 0;
+        const completionRate = totalTickets > 0 ? Math.round((closedTickets / totalTickets) * 100) : 0;
+
+        return {
+            status: mergedStatusData,
+
+            priority: priorityData?.map((d: any) => ({
+                name: d.priorida || d.prioridad || d.priority || 'Unknown',
+                value: Number(d.total) || Number(d.total_tickets) || 0,
+                pct: d.pct_mes || 0
+            })) || [],
+
+            assignee: assigneeData?.map((d: any) => ({
+                name: d.asignado || d.assignee_name || 'Unknown',
+                tickets: Number(d.total_issues) || 0,
+                pctIssues: Number(d.porcentaje_issues) || 0,
+                pctHours: Number(d.porcentaje_horas) || 0
+            })) || [],
+
+            type: typeData?.map((d: any) => ({
+                name: d.issuetype || d.tipo || d.type || 'Unknown',
+                value: Number(d.total_issues) || Number(d.total) || Number(d.cantidad) || 0
+            })) || [],
+
+            module: moduleData?.map((d: any) => ({
+                name: d.modulo || d.module || 'Unknown',
+                value: Number(d.total_horas) || 0
+            })) || [],
+
+            kpis: {
+                totalTickets: totalTickets,
+                totalHours: totalHours?.total_horas || 0,
+                completionRate: completionRate
             }
         };
+    }, [data]);
 
-        fetchInitialData();
-    }, [projectId]);
+    // Derived vars for PDF/Download to maintain compatibility
+    const detailsData = data?.detailsData || [];
+    const issuesData = data?.calendarIssues || [];
+    const topTicketsData = data?.topTickets || [];
+    const consultantData = data?.assigneeData || [];
 
-    // Fetch Dashboard Data when month is selected
-    useEffect(() => {
-        const fetchDashboardData = async () => {
-            if (!projectId || !selectedMonth || !projectJiraId) return;
-
-            try {
-                console.log(`Fetching REAL data for Project: ${projectJiraId}, Month: ${selectedMonth} `);
-
-                const cleanJiraId = projectJiraId?.trim();
-
-                // 1. Fetch KPIs from v_tickets_mes_proyecto
-                const { data: kpiData, error: kpiError } = await supabase
-                    .from('v_tickets_mes_proyecto')
-                    .select('*') // Select ALL columns to find hours
-                    .eq('proyecto', cleanJiraId)
-                    // The view has 'mes' as a date (e.g., 2025-09-01). 
-                    // We need to match the month. Since selectedMonth is 'YYYY-MM', 
-                    // we might need to filter by range or assume the view has a text column or we match the start date.
-                    // Based on the screenshot, 'mes' is a date '2025-09-01'.
-                    // Let's try strict equality with the first day of the month.
-                    .eq('mes', `${selectedMonth}-01`)
-                    .single();
-
-                // 2. Fetch Status Data
-                const { data: statusDataResult, error: statusError } = await supabase
-                    .from('v_issues_mes_proyecto_estado')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`);
-
-                // 3. Fetch Priority Data
-                // Hint suggested: v_tickets_mes_proyecto_prioridad_pct
-                const { data: priorityData, error: priorityError } = await supabase
-                    .from('v_tickets_mes_proyecto_prioridad_pct')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`);
-
-                // 4. Fetch Assignee Data
-                // Switched to v_issues_mes_proyecto_asignacion to get percentages
-                const { data: assigneeData, error: assigneeError } = await supabase
-                    .from('v_issues_mes_proyecto_asignacion')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`);
-
-
-                // 5. Fetch Type Data
-                const { data: typeDataResult, error: typeError } = await supabase
-                    .from('v_issues_mes_proyecto_tipo')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`);
-
-
-                // Construct Dashboard Data
-                // Mapping keys based on final verification:
-                // Status: status, total_tickets
-                // Priority: priorida, total
-                // Assignee: assignee_name, total
-                // Type: Guessing 'tipo' and 'total' or 'cantidad'
-
-                // 6. Fetch Module Hours Data
-                const { data: moduleData, error: moduleError } = await supabase
-                    .from('v_horas_mes_modulo_proyecto')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`);
-
-                // 7. Fetch Total Hours Data
-                const { data: hoursData, error: hoursError } = await supabase
-                    .from('v_horas_mes_proyecto')
-                    .select('total_horas')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`)
-                    .single();
-
-                // 8. Fetch Detailed Hours Data
-                const { data: details, error: detailsError } = await supabase
-                    .from('v_horas_totales_detalles')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`)
-                    .order('created_at_jira', { ascending: false });
-
-                if (detailsError) {
-                    console.error('Error fetching details data:', detailsError);
-                } else {
-                    setDetailsData(details || []);
-                }
-
-                // Fetch Status Data for PDF
-                if (statusError) {
-                    console.error('Error fetching status data:', statusError);
-                } else {
-                    setStatusData(statusDataResult || []);
-                }
-
-                // Fetch Type Data for PDF
-                if (typeError) {
-                    console.error('Error fetching type data:', typeError);
-                } else {
-                    setTypeData(typeDataResult || []);
-                }
-
-                // --- NEW DATA FOR ADVANCED PDF ---
-
-                // 9. Fetch Issues for Calendar (using v_tickets_mes_proyecto_status to get all tickets or issues table)
-                // We need creation dates. 'issues' table is best but we need to filter by project and month.
-                // Since 'issues' might be large, let's try to use a view if possible, or filter 'issues' carefully.
-                // We can use 'v_horas_totales_detalles' to get dates of worklogs, but for TICKET CREATION we need 'issues'.
-                // Let's use 'issues' filtered by 'fechacreacion' range.
-                const startDate = `${selectedMonth}-01`;
-                // Calculate end date (next month)
-                const [year, month] = selectedMonth.split('-').map(Number);
-                const nextMonth = month === 12 ? 1 : month + 1;
-                const nextYear = month === 12 ? year + 1 : year;
-                const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-
-                const { data: issuesResult, error: issuesError } = await supabase
-                    .from('issues')
-                    .select('clave, fechacreacion, resumen')
-                    .eq('proyecto', cleanJiraId)
-                    .gte('fechacreacion', startDate)
-                    .lt('fechacreacion', endDate);
-
-                if (issuesError) console.error('Error fetching issues for calendar:', issuesError);
-                setIssuesData(issuesResult || []);
-
-                // 10. Fetch Top Tickets (v_horas_totales_por_proyecto_ticket)
-                const { data: topTicketsResult, error: topTicketsError } = await supabase
-                    .from('v_horas_totales_por_proyecto_ticket')
-                    .select('*')
-                    .eq('proyecto', cleanJiraId)
-                    .eq('mes', `${selectedMonth}-01`)
-                    .order('ticket_horas', { ascending: false })
-                    .limit(10);
-
-                if (topTicketsError) console.error('Error fetching top tickets:', topTicketsError);
-                setTopTicketsData(topTicketsResult || []);
-
-                // 11. Fetch Consultant Data (v_issues_mes_proyecto_asignacion)
-                // Already fetched as 'assigneeData' but let's set it for PDF specifically to be safe
-                setConsultantData(assigneeData || []);
-
-                // 12. Fetch Module Data (v_horas_mes_modulo_proyecto)
-                // Already fetched as 'moduleData'
-                setModuleDataPDF(moduleData || []);
-
-                // Construct Dashboard Data
-
-                const FIXED_STATUSES = [
-                    'Bloqueado',
-                    'Cancelado',
-                    'Cerrado',
-                    'Pruebas de usuario',
-                    'Trabajo en curso'
-                ];
-
-                const statusMap = new Map(statusDataResult?.map((d: any) => [d.estado || d.status, Number(d.total_issues) || Number(d.total_tickets)]) || []);
-
-                const mergedStatusData = FIXED_STATUSES.map(status => {
-                    const config = STATUS_CONFIG[status] || { color: 'text-slate-400', icon: HelpCircle, label: status };
-                    return {
-                        name: status,
-                        value: statusMap.get(status) || 0,
-                        ...config
-                    };
-                });
-
-                // Calculate Completion Rate
-                // Use the sum of statusDataResult for totalTickets to ensure consistency with the chart
-                const totalTickets = statusDataResult?.reduce((sum: number, d: any) => sum + (Number(d.total_issues) || Number(d.total_tickets) || 0), 0) || 0;
-                const closedTickets = statusMap.get('Cerrado') || 0;
-
-                const completionRate = totalTickets > 0 ? Math.round((closedTickets / totalTickets) * 100) : 0;
-
-                const newDashboardData = {
-                    status: mergedStatusData,
-
-                    priority: priorityData?.map((d: any) => ({
-                        name: d.priorida || d.prioridad || d.priority || 'Unknown',
-                        value: Number(d.total) || Number(d.total_tickets) || 0,
-                        pct: d.pct_mes || 0
-                    })) || [],
-
-                    assignee: assigneeData?.map((d: any) => ({
-                        name: d.asignado || d.assignee_name || 'Unknown',
-                        tickets: Number(d.total_issues) || 0,
-                        pctIssues: Number(d.porcentaje_issues) || 0,
-                        pctHours: Number(d.porcentaje_horas) || 0
-                    })) || [],
-
-                    type: typeDataResult?.map((d: any) => ({
-                        name: d.issuetype || d.tipo || d.type || 'Unknown',
-                        value: Number(d.total_issues) || Number(d.total) || Number(d.cantidad) || 0
-                    })) || [],
-
-                    module: moduleData?.map((d: any) => ({
-                        name: d.modulo || d.module || 'Unknown',
-                        value: Number(d.total_horas) || 0
-                    })) || [],
-
-                    kpis: {
-                        totalTickets: totalTickets,
-                        totalHours: hoursData?.total_horas || 0,
-                        completionRate: completionRate
-                    }
-                };
-
-                setDashboardData(newDashboardData);
-
-                // Temporary Debug Log to find the hours column
-                console.log('KPI Data Raw:', kpiData);
-
-            } catch (err) {
-                console.error('Error fetching dashboard data:', err);
-            }
-        };
-
-        fetchDashboardData();
-    }, [projectId, selectedMonth, projectJiraId]);
+    // Project Info
+    const projectName = data?.projectInfo?.nombre || '';
+    const projectContractedHours = Number(data?.projectInfo?.horas_contratadas) || 50;
 
     const handleDownload = () => {
         console.log('Starting download process...');
@@ -426,10 +218,9 @@ export const ProjectAnalytics = () => {
         const pageWidth = doc.internal.pageSize.width;
         const pageHeight = doc.internal.pageSize.height;
         const margin = 15;
-        const primaryColor = [52, 152, 219]; // Lighter Blue (User requested)
-        const secondaryColor = [52, 73, 94]; // Dark Slate
-        const accentColor = [230, 126, 34]; // Orange
-        const lightBg = [245, 247, 250]; // Light Gray
+        const primaryColor: [number, number, number] = [52, 152, 219]; // Lighter Blue (User requested)
+        const secondaryColor: [number, number, number] = [52, 73, 94]; // Dark Slate
+        const accentColor: [number, number, number] = [230, 126, 34]; // Orange
 
         // Helper: Load Image with dimensions
         const loadImage = (src: string): Promise<{ data: string; width: number; height: number }> => {
